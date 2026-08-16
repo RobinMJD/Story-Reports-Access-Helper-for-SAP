@@ -131,7 +131,7 @@ for (const fileName of [
 }
 
 writeFileSync(
-  resolve(QA_DIR, "store-assets-validation.json"),
+  resolve(STORE_DIR, "store-assets-validation.json"),
   `${JSON.stringify(
     {
       specification: {
@@ -159,7 +159,7 @@ writeFileSync(
 console.log(`Generated ${validation.length} public-safe Microsoft Edge marketing assets.`);
 console.log(`Store assets: ${STORE_DIR}`);
 console.log(`Public documentation copies: ${DOCS_DIR}`);
-console.log(`QA report: ${resolve(QA_DIR, "store-assets-validation.json")}`);
+console.log(`Public-safe validation report: ${resolve(STORE_DIR, "store-assets-validation.json")}`);
 
 async function renderAsset(browserInstance, fileName, dimensions, body, styles, options = {}) {
   const { width, height } = dimensions;

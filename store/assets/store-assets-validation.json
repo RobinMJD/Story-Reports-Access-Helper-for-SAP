@@ -1,0 +1,97 @@
+{
+  "specification": {
+    "authority": "Microsoft Edge Developer documentation",
+    "url": "https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension",
+    "checkedOn": "2026-08-16",
+    "assetSpecs": {
+      "icon": {
+        "width": 300,
+        "height": 300,
+        "required": true
+      },
+      "smallPromo": {
+        "width": 440,
+        "height": 280,
+        "required": true
+      },
+      "largePromo": {
+        "width": 1400,
+        "height": 560,
+        "required": false
+      },
+      "screenshot": {
+        "width": 1280,
+        "height": 800,
+        "maximumCount": 6,
+        "required": false
+      }
+    }
+  },
+  "contentSafety": {
+    "source": "Deterministic HTML/CSS composition",
+    "realCustomerData": false,
+    "realHostnames": false,
+    "realPeople": false,
+    "realReportNames": false,
+    "thirdPartyLogos": false,
+    "logoSource": "icons/icon-source.svg"
+  },
+  "results": [
+    {
+      "fileName": "store-icon-300.png",
+      "width": 300,
+      "height": 300,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 1
+    },
+    {
+      "fileName": "small-promo-440x280.png",
+      "width": 440,
+      "height": 280,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 3
+    },
+    {
+      "fileName": "large-promo-1400x560.png",
+      "width": 1400,
+      "height": 560,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 5
+    },
+    {
+      "fileName": "screenshot-01-automatic-fix-1280x800.png",
+      "width": 1280,
+      "height": 800,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 7
+    },
+    {
+      "fileName": "screenshot-02-simple-status-1280x800.png",
+      "width": 1280,
+      "height": 800,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 5
+    },
+    {
+      "fileName": "screenshot-03-built-in-help-1280x800.png",
+      "width": 1280,
+      "height": 800,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 7
+    },
+    {
+      "fileName": "screenshot-04-private-by-design-1280x800.png",
+      "width": 1280,
+      "height": 800,
+      "overflowFree": true,
+      "safeBounds": true,
+      "checkedSafeElements": 5
+    }
+  ]
+}

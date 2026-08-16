@@ -36,7 +36,7 @@ test("public documentation images are exact copies of Store assets", () => {
 });
 
 test("the renderer records overflow and safe-bound checks for every Store asset", () => {
-  const report = JSON.parse(readFileSync(resolve("qa/store-assets-validation.json"), "utf8"));
+  const report = JSON.parse(readFileSync(resolve("store/assets/store-assets-validation.json"), "utf8"));
   const names = report.results.map(({ fileName }) => fileName);
 
   assert.equal(report.specification.authority, "Microsoft Edge Developer documentation");
@@ -67,11 +67,13 @@ test("marketing sources use the original mark and contain no customer-specific m
   assert.doesNotMatch(icon, /sap|successfactors|microsoft|edge/i);
 });
 
-test("the QA contact sheet contains all four final screenshots", () => {
-  assert.deepEqual(readPngDimensions(resolve("qa/store-assets-contact-sheet.png")), {
-    width: 1600,
-    height: 1120
-  });
+test("the deterministic generator and public README include all four final screenshots", () => {
+  const generator = readFileSync(resolve("scripts/generate-store-assets.mjs"), "utf8");
+  const readme = readFileSync(resolve("README.md"), "utf8");
+  for (const fileName of screenshots) {
+    assert.match(generator, new RegExp(fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(readme, new RegExp(fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
 });
 
 function readPngDimensions(path) {
