@@ -4,7 +4,7 @@ Target release: **v1.0.0 for Microsoft Edge Add-ons**
 
 Date: 2026-08-16
 
-This record separates the user-accepted v0.3.1 browser fix from the final v1.0.0 release package. GitHub publication, Partner Center upload, certification, and public Microsoft Edge Add-ons availability are separate states and must be recorded independently.
+This record separates the user-accepted v0.3.1 browser fix from the final v1.0.0 release package. GitHub publication, Partner Center submission, certification, and public Microsoft Edge Add-ons availability are separate states and are recorded independently below.
 
 ## Confirmed Live Acceptance Of The Core Fix
 
@@ -102,7 +102,41 @@ Passed checks included:
 
 This verifies the packaged browser mechanics in the tested Edge/platform combination. The separate live acceptance above verifies the downstream Story outcome for the accepted v0.3.1 core flow. It does not claim that every tenant or supported host family has been live-tested.
 
-The v1.0.0 ZIP is a locally validated production artifact. This evidence alone does not prove a GitHub Release, Partner Center submission, certified item, or live Microsoft Edge Add-ons listing; those publication states must be verified separately.
+The exact v1.0.0 ZIP is the production artifact used by the public GitHub Release and Microsoft Partner Center submission recorded below. A submitted item in review is not a certified or live Microsoft Edge Add-ons listing.
+
+## GitHub Publication Evidence
+
+- Public repository: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP`
+- Release: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP/releases/tag/v1.0.0`
+- Release commit: `216dffc189b99e65558558251e6fbf492a224ac0`
+- Annotated tag: `v1.0.0`, resolving to the release commit above
+- CI run for the release commit: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP/actions/runs/31956797117`
+- GitHub Release workflow: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP/actions/runs/31956876222`
+- Release ZIP and checksum were downloaded from the public Release and compared byte-for-byte with the exact locally accepted artifact.
+- Active repository rulesets require pull requests and the `verify` CI check for `main`, and prevent deletion or non-fast-forward updates of `v*` release tags.
+- GitHub private vulnerability reporting is enabled.
+
+## Microsoft Edge Add-ons Submission Evidence
+
+Submitted through Microsoft Partner Center on **2026-08-16 at approximately 18:16 UTC**.
+
+- Product: `Story Reports Access Helper for SAP`
+- Version: `1.0.0`
+- Product ID: `7388eb01-8627-440f-aaf6-3ca300362ff9`
+- Store ID: `0RDCKFT1CDT4`
+- CRX ID: `bcmdpclnmpflaollgfjamioigkbpdmdc`
+- Current Partner Center state: **In review**
+- Visibility: **Public**
+- Category: **Productivity**
+- Language: **English (United States)**
+- Markets: all 241 currently offered markets, including future markets
+- Public Store URL: not yet available; Partner Center reports that it will be assigned after publication
+
+Partner Center verified the exact ZIP identified above and displayed version `1.0.0` as complete. It issued one non-blocking package warning that the optional manifest `short_name` value `Story Access Helper` exceeds the 12-character recommendation. The full product name, package validation, and submission were accepted; no package bytes were changed after the immutable GitHub Release.
+
+The submitted listing includes the original 300 x 300 logo, both promotional tiles, four synthetic 1280 x 800 screenshots, the public repository and privacy URLs, conservative website-content data-use disclosure, and certification notes that contain no credentials, customer data, tenant details, reports, cookies, or authentication payloads.
+
+Partner Center states that Microsoft is reviewing the submission and expects to respond within seven business days. **In review is not live.** Live availability must be verified only after the public Store URL offers version 1.0.0.
 
 ## Required v1.0.0 Verification
 
