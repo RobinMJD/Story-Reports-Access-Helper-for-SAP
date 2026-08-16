@@ -117,6 +117,8 @@ The reviewed SuccessFactors families include `successfactors.com`, `successfacto
 
 The extension locally processes limited current-page and website context only for its disclosed single purpose. It does not collect or transmit personal data to the developer.
 
+Select **Website content** in Partner Center to conservatively disclose the local inspection of fixed SAP storage-access structure and browser-provided page context. Leave the other user-data categories unselected. This disclosure does not mean that website content is transmitted: the extension reads no page-content values and sends no user data to the developer or a developer-operated service.
+
 It does not read or collect cookie values, credentials, authentication information, report data, employee data, communications, location, financial, payment, or health information. It does not sell, transfer, profile, advertise against, or use data for creditworthiness or any unrelated purpose.
 
 SAP's existing sign-in form is submitted directly by the browser to its existing same-origin SAP endpoint after the durable one-use gate. The extension does not read or reconstruct the form values. The optional help action opens a fixed SAP KBA URL without adding extension data.
