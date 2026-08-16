@@ -4,9 +4,11 @@
 
 Story Reports Access Helper prepares the narrow browser-storage access required by an SAP sign-in embedded in a Story Report. There is no tenant, company, account, or URL to configure.
 
-Current version: **v1.0.0**
+<p align="center">
+  <a href="https://microsoftedge.microsoft.com/addons/detail/bcmdpclnmpflaollgfjamioigkbpdmdc"><img src="docs/images/store-badges/microsoft-edge-addons.png" alt="Get it from Microsoft Edge" height="58"></a>
+</p>
 
-> Microsoft Edge Add-ons publication is a separate release state. A public repository, tag, or GitHub Release does not by itself mean that the extension is available in Microsoft Edge Add-ons.
+Current version: **v1.0.0**
 
 [![Story Reports Access Helper for SAP](docs/images/large-promo-1400x560.png)](docs/images/large-promo-1400x560.png)
 
