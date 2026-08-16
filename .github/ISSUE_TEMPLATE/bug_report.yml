@@ -1,0 +1,75 @@
+name: Extension problem
+description: Report a sanitized Microsoft Edge or Story Report compatibility problem.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Story Reports Access Helper.
+
+        Do not attach a HAR file, cookies, tokens, request bodies, credentials, report content, employee information, customer names, tenant-specific hostnames, or screenshots containing private data.
+  - type: input
+    id: extension_version
+    attributes:
+      label: Extension version
+      description: Copy the version displayed at the bottom of the popup.
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: edge_version
+    attributes:
+      label: Microsoft Edge and operating-system version
+      placeholder: Microsoft Edge 000.0.0000.00 on Windows 11
+    validations:
+      required: true
+  - type: dropdown
+    id: preexisting_page
+    attributes:
+      label: Was the Story page open before installation or re-enablement?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: refresh
+    attributes:
+      label: Did the extension automatically refresh that active Story page?
+      options:
+        - "Yes, once"
+        - "No"
+        - "More than once"
+        - "Not applicable or not sure"
+    validations:
+      required: true
+  - type: input
+    id: popup_status
+    attributes:
+      label: Exact popup status
+      description: Use only the short extension status. Do not paste browser-console or SAP page content.
+      placeholder: Ready
+    validations:
+      required: true
+  - type: input
+    id: sap_family
+    attributes:
+      label: Standard SAP parent host family, if known
+      description: Provide only a parent family such as successfactors.eu or accounts.cloud.sap. Do not provide the tenant-specific hostname.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Sanitized steps and result
+      description: Describe what you did and what happened without customer, tenant, account, report, employee, or authentication details.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safe_content
+    attributes:
+      label: Public-data confirmation
+      options:
+        - label: I removed all customer, tenant, account, report, employee, credential, cookie, token, and authentication data from this public report.
+          required: true

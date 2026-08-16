@@ -1,0 +1,274 @@
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = new URL("../", import.meta.url);
+const manifest = readJson("manifest.json");
+const packageJson = readJson("package.json");
+
+assert(manifest.manifest_version === 3, "manifest_version must be 3");
+assert(manifest.version === packageJson.version, "manifest and package versions must match");
+assert(manifest.version === "1.0.0", "the verified source must be v1.0.0");
+assert(manifest.version_name === "1.0.0", "the verified release label must be v1.0.0");
+assert(manifest.incognito === "not_allowed", "incognito must be explicitly disabled");
+assert(
+  JSON.stringify(manifest.permissions) === JSON.stringify(["storage", "alarms", "contentSettings"]),
+  "storage, alarms, and contentSettings must be the only required API permissions"
+);
+assert(!manifest.optional_permissions, "optional permissions must not be declared");
+const expectedSfHostPermissions = [
+  "https://*.successfactors.com/*",
+  "https://*.successfactors.eu/*",
+  "https://*.successfactors.cn/*",
+  "https://*.sapsf.com/*",
+  "https://*.sapsf.eu/*",
+  "https://*.sapsf.cn/*",
+  "https://*.hr.cloud.sap/*",
+  "https://*.sapcloud.cn/*"
+];
+assert(
+  JSON.stringify(manifest.host_permissions) === JSON.stringify(expectedSfHostPermissions),
+  "host access must be limited to reviewed standard SuccessFactors families"
+);
+assert(manifest.background?.type === "module", "the service worker must be an ES module");
+assert(manifest.content_scripts?.length === 2, "exactly two declarative content-script rules are expected");
+
+const contentRule = manifest.content_scripts[0];
+const expectedIasMatches = [
+  "https://*.accounts.ondemand.com/*",
+  "https://*.accounts400.ondemand.com/*",
+  "https://*.accounts.cloud.sap/*",
+  "https://*.accounts400.cloud.sap/*",
+  "https://*.accounts.sapcloud.cn/*"
+];
+assert(
+  JSON.stringify(contentRule.matches) === JSON.stringify(expectedIasMatches),
+  "only the reviewed standard IAS host families may be in content-script scope"
+);
+assert(contentRule.all_frames === true, "IAS interstitial detection must include nested frames");
+assert(contentRule.match_about_blank === false, "about: frame inheritance must remain disabled");
+assert(contentRule.match_origin_as_fallback === false, "origin fallback injection must remain disabled");
+
+const sfActivationRule = manifest.content_scripts[1];
+const expectedSfReportCenterMatches = expectedSfHostPermissions.map((pattern) =>
+  `${pattern.slice(0, -1)}xi/ui/reportcenter/pages/reportCenter.xhtml*`
+);
+assert(
+  JSON.stringify(sfActivationRule.matches) === JSON.stringify(expectedSfReportCenterMatches),
+  "the activation marker must be limited to the exact Report Center path"
+);
+assert(JSON.stringify(sfActivationRule.js) === JSON.stringify(["src/sf-activation.js"]), "unexpected activation content script");
+assert(sfActivationRule.all_frames === false, "the activation marker must be top-frame only");
+assert(sfActivationRule.run_at === "document_start", "the activation marker must register at document_start");
+assert(sfActivationRule.match_about_blank === false, "activation about: inheritance must remain disabled");
+assert(sfActivationRule.match_origin_as_fallback === false, "activation origin fallback must remain disabled");
+
+const packageFiles = [
+  "manifest.json",
+  "src/background.js",
+  "src/core.js",
+  "src/ias-content.js",
+  "src/sf-activation.js",
+  "src/popup.html",
+  "src/popup.css",
+  "src/popup.js",
+  "icons/icon16.png",
+  "icons/icon32.png",
+  "icons/icon48.png",
+  "icons/icon128.png"
+];
+for (const file of packageFiles) assert(existsSync(new URL(file, projectRoot)), `Missing packaged file: ${file}`);
+
+const sourceFiles = ["src/background.js", "src/core.js", "src/ias-content.js", "src/sf-activation.js", "src/popup.js"];
+const forbidden = [
+  [/chrome\.cookies\b/, "cookie API"],
+  [/chrome\.webRequest\b/, "webRequest API"],
+  [/chrome\.scripting\b/, "scripting API"],
+  [/chrome\.tabs\.remove\s*\(/, "tab removal"],
+  [/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/, "extension-initiated network request"],
+  [/\bnavigator\.sendBeacon\s*\(/, "beacon telemetry"],
+  [/\.dispatchEvent\s*\(/, "synthetic DOM event dispatch"],
+  [/\.click\s*\(/, "programmatic DOM click"],
+  [/\beval\s*\(/, "eval"],
+  [/\bnew\s+Function\b/, "dynamic Function construction"],
+  [/--(?:disable-web-security|ignore-certificate-errors|disable-features)/, "unsafe browser flag"]
+];
+for (const file of sourceFiles) {
+  const source = readFileSync(new URL(file, projectRoot), "utf8");
+  for (const [pattern, label] of forbidden) assert(!pattern.test(source), `${file} contains forbidden ${label}`);
+  const check = spawnSync(process.execPath, ["--check", fileURLToPath(new URL(file, projectRoot))], { encoding: "utf8" });
+  assert(check.status === 0, `${file} failed syntax check: ${check.stderr.trim()}`);
+}
+
+const background = readFileSync(new URL("src/background.js", projectRoot), "utf8");
+const core = readFileSync(new URL("src/core.js", projectRoot), "utf8");
+const iasContent = readFileSync(new URL("src/ias-content.js", projectRoot), "utf8");
+const sfActivation = readFileSync(new URL("src/sf-activation.js", projectRoot), "utf8");
+const popup = readFileSync(new URL("src/popup.js", projectRoot), "utf8");
+const popupHtml = readFileSync(new URL("src/popup.html", projectRoot), "utf8");
+const runtime = `${background}\n${core}\n${iasContent}\n${sfActivation}\n${popup}`;
+
+for (const legacy of [
+  "helper-ready",
+  "helper-confirmed",
+  "helper-open",
+  "resume-source-document",
+  "open-fresh-report-center",
+  "fresh-report-center",
+  "recoveryOfferId",
+  "makeRecoveryOffer",
+  "makeReportCenterUrl",
+  "makeHelperUrl",
+  "isExactHelperUrl"
+]) {
+  assert(!runtime.includes(legacy), `direct-only runtime still contains legacy ${legacy}`);
+}
+
+assert(
+  /(?:chrome\.contentSettings(?:\?\.)?\.cookies|\bcookies)\.set\s*\(/.test(background),
+  "automatic mode must set exact cookie content-setting pairs"
+);
+assert(
+  /(?:chrome\.contentSettings(?:\?\.)?\.cookies|\bcookies)\.get\s*\(/.test(background),
+  "automatic mode must verify the effective cookie setting"
+);
+assert(
+  /(?:chrome\.contentSettings(?:\?\.)?\.cookies|\bcookies)\.clear\s*\(/.test(background),
+  "automatic mode must support clearing its cookie rules"
+);
+assert(
+  background.includes('scope: "regular"') || background.includes("scope: 'regular'"),
+  "content-setting writes and cleanup must be limited to regular scope"
+);
+assert(
+  background.includes('accessLevel: "TRUSTED_CONTEXTS"') || background.includes("accessLevel: 'TRUSTED_CONTEXTS'"),
+  "the durable allowance ledger and legacy-marker cleanup must be restricted to trusted extension contexts"
+);
+assert(!/chrome\.contentSettings\b/.test(core), "core helpers must not call contentSettings directly");
+assert(!/chrome\.contentSettings\b/.test(iasContent), "IAS content scripts must not call contentSettings");
+assert(!/chrome\.contentSettings\b/.test(popup), "the popup must delegate content-setting mutations to the service worker");
+assert(core.includes("primaryPattern: `https://${iasUrl.hostname}:443/*`"), "IAS primary patterns must be exact HTTPS port 443 hosts");
+assert(core.includes("secondaryPattern: `https://${sourceUrl.hostname}:443/*`"), "SuccessFactors secondary patterns must be exact HTTPS port 443 hosts");
+assert(!/[`'"]https:\/\/\*\.(?:accounts|successfactors|sapsf|sapcloud|cloud\.sap)/.test(core), "cookie exceptions must never use wildcard parent domains");
+assert(!core.includes("<all_urls>"), "cookie exceptions must never use all-URL scope");
+
+assert(background.includes('const SF_ACTIVATION_BUILD = "1.0.0"'), "background activation build must be current");
+assert(sfActivation.includes('const BUILD = "1.0.0"'), "top-frame activation build must be current");
+assert(sfActivation.includes('const PROTOCOL = 1'), "top-frame activation protocol must be explicit");
+assert(!/\b(?:document|fetch|XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/.test(sfActivation), "activation marker must not inspect page data or use storage/network APIs");
+assert(background.includes("chrome.runtime.onInstalled.addListener"), "install recovery listener is required");
+assert(background.includes("chrome.tabs.onActivated.addListener"), "re-enable activation recovery listener is required");
+assert(background.includes("lastFocusedWindow: true"), "install recovery must target only the focused window");
+assert(background.includes("isExactStoryReportUrl(tab.url)"), "recovery must validate the exact Story route");
+assert(background.includes("chrome.windows.get(windowId)"), "recovery must verify actual window focus");
+assert(background.includes("state.activationAttempts.push(attempt)"), "recovery must persist a write-ahead tombstone");
+assert(background.includes("chrome.tabs.reload(tabId, { bypassCache: false })"), "recovery must use one normal reload");
+assert((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length === 1, "there must be exactly one reviewed tab reload call site");
+assert(!/chrome\.tabs\.(?:create|remove)\s*\(/.test(background), "recovery must never create or remove tabs");
+assert(!manifest.permissions.includes("tabs"), "the broad tabs permission is forbidden");
+assert(!manifest.permissions.includes("scripting"), "the scripting permission is forbidden");
+assert(!manifest.permissions.includes("management"), "the management permission is forbidden");
+assert(!manifest.permissions.includes("webNavigation"), "the webNavigation permission is forbidden");
+
+assert(core.includes("export const RELIABLE_RULE_TTL_MS = 60 * 60 * 1000"), "allowance lifetime must have a hard 60-minute ceiling");
+assert(core.includes("export const MAX_RELIABLE_PAIRS = 20"), "the local allowance ledger must be capped at 20 pairs");
+assert(core.includes("expiresAt: now + RELIABLE_RULE_TTL_MS"), "new allowance expiry must derive from creation time");
+assert(core.includes(".slice(0, MAX_RELIABLE_PAIRS)"), "pruned allowance ledgers must enforce the pair cap");
+assert(
+  core.includes("expiresAt - createdAt > RELIABLE_RULE_TTL_MS"),
+  "persisted allowances exceeding the hard lifetime must be rejected"
+);
+
+assert(!runtime.includes("pause-automatic-fixing"), "the v1 runtime must not retain the removed Pause control contract");
+assert(!runtime.includes("resume-automatic-fixing"), "the v1 runtime must not retain the removed Resume control contract");
+assert(
+  !`${core}\n${iasContent}\n${sfActivation}\n${popup}`.includes("sapIasReliableModeControl.v1"),
+  "only service-worker startup migration code may reference the legacy Pause marker"
+);
+assert(
+  background.includes('const LEGACY_RELIABLE_CONTROL_KEY = "sapIasReliableModeControl.v1"'),
+  "startup must identify the legacy Pause marker exactly"
+);
+assert(background.includes("await removeLegacyPauseMarker()"), "startup must delete the legacy Pause marker");
+assert(
+  background.includes("await chrome.storage.local.remove(LEGACY_RELIABLE_CONTROL_KEY)"),
+  "legacy Pause-marker cleanup must remove only the exact historical key"
+);
+assert(background.includes('hasExactKeys(message, ["type"])'), "the popup status request must accept only an exact message shape");
+assert(background.includes("isTrustedPopupSender(sender)"), "popup status access must be restricted to the trusted popup");
+
+assert(core.includes('export const STATE_KEY = "sapIasStorageAccessWorkflows.v9"'), "session state must use the v9 phased recovery schema");
+assert(core.includes("export const STATE_VERSION = 9"), "session state version must be 9");
+assert(core.includes('["reload-pending", "reload-attempted"]'), "recovery markers must have exact pending and terminal phases");
+assert(sfActivation.includes('type: "sf-activation-ready"'), "a newly loaded top document must announce the current activation marker");
+assert(background.includes("handleStoryActivationReady(message, sender)"), "the background must authenticate the post-reload marker transition");
+assert(
+  background.includes('hasExactKeys(message, ["resumeAttemptId", "type"])'),
+  "durable replay commits must accept only an exact attempt-token message"
+);
+assert(background.includes("handleReplayScheduleReady(message, sender)"), "the background must own the durable replay commit");
+assert(background.includes('appendRecentResult(state, workflow, "replay-scheduled")'), "the commit must persist a scheduled tombstone");
+assert(background.includes("isMatchingReplaySchedule"), "outer channel loss must reconcile against the exact scheduled attempt");
+assert(background.includes("documentId: claimed.sourceDocumentId"), "continuation must target the exact originating IAS document");
+assert(background.includes("const initializationPromise = initializeBackground()"), "cold-worker messages must have one startup barrier");
+assert(
+  /initializationPromise\s*\.then\(\(\) => dispatchMessage\(message, sender\)\)/s.test(background),
+  "new detections must wait for startup reconciliation before claiming a workflow"
+);
+assert(core.includes('"replay-scheduled"'), "replay-scheduled must remain a sanitized public result code");
+const legacyReplayCode = ["replay", "submitted"].join("-");
+assert(!runtime.includes(legacyReplayCode), "runtime and popup source must not claim replay submission");
+
+assert(iasContent.includes("if (window.top === window) return;"), "top-level IAS pages must remain untouched");
+assert(iasContent.includes('message?.type === "resume-with-cookie-exception"'), "only exact-pair continuation may request replay");
+assert(!iasContent.includes("document.requestStorageAccess("), "automatic mode must not invoke an interactive Storage Access prompt");
+assert(iasContent.includes("if (resumeAttempted)"), "a document-local guard must prevent repeat continuation");
+assert((iasContent.match(/HTMLFormElement\.prototype\.submit\.call\(/g) || []).length === 1, "exactly one reviewed native form-submit call site is allowed");
+assert(iasContent.includes("Array.from(replayForm.elements)"), "all form-associated replay controls must be validated");
+assert(!/\.value\b/.test(iasContent), "IAS replay field values must never be read");
+assert(!/\b(?:FormData|cookieStore)\b/.test(iasContent), "IAS continuation must not expose form values or cookie data through alternate APIs");
+assert(!/\bdocument\.cookie\b/.test(runtime), "extension source must never read browser cookies");
+assert(!/requestSubmit\s*\(/.test(iasContent), "IAS replay must not synthesize a submit-button activation");
+
+const deliveryStart = iasContent.indexOf("async function deliverResumeResult");
+const gatedTask = iasContent.indexOf("replayGate.then(() => submitReplayPlan(result))", deliveryStart);
+const commitRequest = iasContent.indexOf('type: "replay-schedule-ready"', deliveryStart);
+const commitCheck = iasContent.indexOf("isExactReplayCommit(commit, resumeAttemptId)", commitRequest);
+const outerAcknowledgement = iasContent.indexOf("sendResponse(result.response)", commitCheck);
+const releaseReplay = iasContent.indexOf("releaseReplay()", outerAcknowledgement);
+const nativeReplay = iasContent.indexOf("HTMLFormElement.prototype.submit.call(interstitial.replayForm)");
+assert(deliveryStart >= 0, "the IAS content script must implement the durable delivery barrier");
+assert(gatedTask > deliveryStart, "one replay task must be registered behind a closed gate");
+assert(commitRequest > gatedTask, "the gated task must exist before the durable commit request");
+assert(commitCheck > commitRequest, "the exact commit acknowledgement must be checked");
+assert(outerAcknowledgement > commitCheck, "the original response may be acknowledged only after durable commit");
+assert(releaseReplay > outerAcknowledgement, "native replay may be released only after the outer response is answered");
+assert(nativeReplay > releaseReplay, "native replay must remain downstream of the durable commit gate");
+
+assert(!/<(?:input|select|textarea)\b/i.test(popupHtml), "the popup must not collect tenant or account input");
+assert(!/\b(?:IAS|contentSettings|cookie|origin|replay|durable|reliable mode|recovery)\b/i.test(popupHtml), "the popup must not expose technical setup terminology");
+assert(!/chrome\.permissions\.(?:request|remove)\s*\(/.test(popup), "required automatic mode must not expose a runtime permission setup flow");
+assert(!/\b(?:pause|resume)\b/i.test(popupHtml), "the popup must not expose removed Pause or Resume controls");
+assert((popupHtml.match(/<button\b/g) || []).length === 1, "the SAP help action must be the popup's only button");
+assert(popupHtml.includes('id="sap-help"'), "the popup must expose one clearly identified SAP help action");
+assert(popupHtml.includes("Open SAP help article"), "the SAP help action must use plain end-user wording");
+assert(
+  popup.includes('const SAP_KB_URL = "https://userapps.support.sap.com/sap/support/knowledge/en/3039244"'),
+  "the popup must pin the exact public SAP KBA 3039244 URL"
+);
+assert(
+  popup.includes("chrome.tabs.create({ url: SAP_KB_URL })"),
+  "the SAP help action must open only the pinned KBA URL"
+);
+assert((popup.match(/chrome\.tabs\.create\s*\(/g) || []).length === 1, "the KBA action must be the only tab-creation site");
+assert((runtime.match(/chrome\.tabs\.create\s*\(/g) || []).length === 1, "no runtime component other than the KBA action may create a tab");
+
+console.log("Manifest, automatic exact-pair, durable replay, legacy cleanup, simple popup, and source-safety checks passed.");
+
+function readJson(path) {
+  return JSON.parse(readFileSync(new URL(path, projectRoot), "utf8"));
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}

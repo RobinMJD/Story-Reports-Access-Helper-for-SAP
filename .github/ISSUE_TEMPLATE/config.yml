@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: SAP KBA 3039244
+    url: https://userapps.support.sap.com/sap/support/knowledge/en/3039244
+    about: Read SAP's related browser-settings guidance for blank Story Reports.

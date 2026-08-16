@@ -1,0 +1,28 @@
+{
+  "name": "story-reports-access-helper-for-sap",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A narrowly scoped Microsoft Edge extension that automatically prepares browser access for supported SAP SuccessFactors Story Reports.",
+  "license": "MIT",
+  "homepage": "https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP/issues"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "verify": "node scripts/verify.mjs && node --test tests/*.test.mjs",
+    "smoke:edge": "node scripts/smoke-edge.mjs",
+    "assets:edge": "node scripts/generate-store-assets.mjs",
+    "package:edge": "node scripts/package-edge.mjs",
+    "verify:edge-package": "node scripts/verify-edge-package.mjs",
+    "check:tag": "node scripts/check-version.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Two browser tabs joined by a confirmation check">
+  <defs>
+    <linearGradient id="background" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A6ED1"/>
+      <stop offset="1" stop-color="#064A91"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <rect x="82" y="108" width="278" height="222" rx="34" fill="#D9ECFF" opacity="0.94"/>
+  <rect x="132" y="172" width="296" height="232" rx="38" fill="#FFFFFF"/>
+  <path d="M193 270h174" stroke="#0A6ED1" stroke-width="28" stroke-linecap="round"/>
+  <path d="M280 232v76" stroke="#0A6ED1" stroke-width="28" stroke-linecap="round"/>
+  <circle cx="378" cy="368" r="76" fill="#18864B"/>
+  <path d="m341 369 24 25 52-59" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

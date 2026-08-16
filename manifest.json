@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "Story Reports Access Helper for SAP",
+  "short_name": "Story Access Helper",
+  "version": "1.0.0",
+  "version_name": "1.0.0",
+  "description": "Helps supported SAP SuccessFactors Story Reports load when browser storage access is blocked.",
+  "homepage_url": "https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP",
+  "minimum_chrome_version": "106",
+  "incognito": "not_allowed",
+  "permissions": [
+    "storage",
+    "alarms",
+    "contentSettings"
+  ],
+  "host_permissions": [
+    "https://*.successfactors.com/*",
+    "https://*.successfactors.eu/*",
+    "https://*.successfactors.cn/*",
+    "https://*.sapsf.com/*",
+    "https://*.sapsf.eu/*",
+    "https://*.sapsf.cn/*",
+    "https://*.hr.cloud.sap/*",
+    "https://*.sapcloud.cn/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Story Reports Access Helper for SAP",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.accounts.ondemand.com/*",
+        "https://*.accounts400.ondemand.com/*",
+        "https://*.accounts.cloud.sap/*",
+        "https://*.accounts400.cloud.sap/*",
+        "https://*.accounts.sapcloud.cn/*"
+      ],
+      "js": [
+        "src/ias-content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "match_about_blank": false,
+      "match_origin_as_fallback": false
+    },
+    {
+      "matches": [
+        "https://*.successfactors.com/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.successfactors.eu/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.successfactors.cn/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.sapsf.com/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.sapsf.eu/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.sapsf.cn/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.hr.cloud.sap/xi/ui/reportcenter/pages/reportCenter.xhtml*",
+        "https://*.sapcloud.cn/xi/ui/reportcenter/pages/reportCenter.xhtml*"
+      ],
+      "js": [
+        "src/sf-activation.js"
+      ],
+      "all_frames": false,
+      "run_at": "document_start",
+      "match_about_blank": false,
+      "match_origin_as_fallback": false
+    }
+  ]
+}

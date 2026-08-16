@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Story Reports Access Helper</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="../icons/icon48.png" width="48" height="48" alt="">
+        <div>
+          <h1>Story Reports Access Helper</h1>
+          <p class="subtitle">for SAP SuccessFactors</p>
+        </div>
+      </header>
+
+      <section class="status-card" role="status" aria-live="polite" aria-atomic="true">
+        <span id="status-dot" class="status-dot success"></span>
+        <div>
+          <strong id="status-title">Ready</strong>
+          <p id="status-detail">Open your Story Report as usual. The helper works automatically.</p>
+        </div>
+      </section>
+
+      <button id="sap-help" type="button">Open SAP help article</button>
+
+      <footer>
+        <span>Works automatically · No report data sent</span>
+        <span id="version"></span>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
