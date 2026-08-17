@@ -15,17 +15,25 @@ test("CI verifies source, audit, deterministic Edge package, and checksum", () =
 });
 
 test("release builds one exact Edge-only artifact and reuses the verified bytes", () => {
-  const packagePath = "release/story-reports-access-helper-for-sap-${{ env.RELEASE_TAG }}-microsoft-edge-addons.zip";
-  assert.equal(release.split(packagePath).length - 1, 2);
+  assert.equal(
+    (release.match(/^\s+release\/story-reports-access-helper-for-sap-\$\{\{ env\.RELEASE_TAG \}\}-microsoft-edge-addons\.zip$/gm) || []).length,
+    1
+  );
   assert.doesNotMatch(release, /chromium-stores|chrome-web-store|CHROME_WEBSTORE/i);
   assert.match(release, /name: microsoft-edge-addons-package-\$\{\{ env\.RELEASE_TAG \}\}/);
   assert.match(release, /environment: microsoft-edge-add-ons/);
   assert.match(release, /EDGE_ADDONS_AUTOMATION_ENABLED == 'true'/);
+  assert.match(release, /EDGE_ADDONS_MANUAL_SUBMISSION_TAG != \(github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name\)/);
   assert.match(release, /Existing release asset differs; refusing overwrite/);
   assert.match(release, /cancel-in-progress: false/);
+  assert.match(release, /group: store-release-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name \}\}/);
   assert.match(release, /verified_commit: \$\{\{ steps\.release_commit\.outputs\.sha \}\}/);
   assert.equal((release.match(/ref: \$\{\{ needs\.verify-package\.outputs\.verified_commit \}\}/g) || []).length, 2);
-  assert.equal((release.match(/sha256sum --check SHA256SUMS\.txt/g) || []).length, 2);
+  assert.equal((release.match(/sha256sum --check SHA256SUMS\.txt/g) || []).length, 3);
+  assert.match(release, /gh release download "\$RELEASE_TAG"/);
+  assert.match(release, /cmp "release\/\$ZIP" "github-release\/\$ZIP"/);
+  assert.match(release, /cmp release\/SHA256SUMS\.txt github-release\/SHA256SUMS\.txt/);
+  assert.match(release, /EDGE_ADDONS_ZIP: github-release\/story-reports-access-helper-for-sap-/);
   assert.doesNotMatch(release, /needs\.github-release\.result != 'failure'/);
   assert.match(release, /needs\.github-release\.result == 'success'/);
   assert.doesNotMatch(release, /Checkout publisher from exact tag/);
@@ -33,6 +41,7 @@ test("release builds one exact Edge-only artifact and reuses the verified bytes"
 
 test("first manual submissions and targeted retries are explicit", () => {
   assert.match(release, /EDGE_ADDONS_AUTOMATION_ENABLED/);
+  assert.match(release, /EDGE_ADDONS_MANUAL_SUBMISSION_TAG/);
   for (const target of ["github", "edge"]) assert.match(release, new RegExp(`- ${target}`));
   assert.doesNotMatch(release, /- chrome/);
 });

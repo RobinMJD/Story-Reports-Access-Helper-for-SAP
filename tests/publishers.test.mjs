@@ -1,13 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildEdgeCertificationRequest,
   buildEdgeEndpoints,
   extractEdgeOperationId,
   getMissingEdgeConfig,
   getEdgeOperationStatus,
   normalizeEdgeCredential,
+  pollOperation,
   readEdgeConfig,
-  sanitizeEdgeMessage
+  sanitizeEdgeMessage,
+  startOperation
 } from "../scripts/publish-edge-addons.mjs";
 
 test("Edge publisher uses v1.1 API-key endpoints and normalizes copied credentials", () => {
@@ -30,6 +33,50 @@ test("Edge publisher uses v1.1 API-key endpoints and normalizes copied credentia
 
 test("publisher diagnostics redact Microsoft Edge API credentials", () => {
   assert.doesNotMatch(sanitizeEdgeMessage("Authorization: ApiKey super-secret"), /super-secret/);
+  assert.equal(sanitizeEdgeMessage("x".repeat(5_000)).length, 4_000);
+});
+
+test("Edge publisher starts a state-changing operation exactly once", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return new Response("temporarily unavailable", { status: 503 });
+  });
+
+  await assert.rejects(
+    startOperation("https://api.addons.microsoftedge.microsoft.com/v1/products/p/submissions", {
+      method: "POST"
+    }),
+    /failed \(503\)/
+  );
+  assert.equal(calls, 1);
+});
+
+test("Edge publisher retries transient GET polling failures and fails closed on unknown status", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("busy", { status: 503, headers: { "retry-after": "0" } });
+    }
+    return new Response(JSON.stringify({ status: "Unexpected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  });
+
+  await assert.rejects(
+    pollOperation("https://api.addons.microsoftedge.microsoft.com/status", {}, 1, 0, "submission"),
+    /unknown status unexpected/i
+  );
+  assert.equal(calls, 2);
+});
+
+test("Edge publisher sends plain-text certification notes", () => {
+  const request = buildEdgeCertificationRequest({ Authorization: "ApiKey secret" }, "Reviewer note");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers["Content-Type"], "text/plain; charset=utf-8");
+  assert.equal(request.body, "Reviewer note");
 });
 
 test("Edge certification notes disclose v1.1.1 recovery and manual-fix boundaries", () => {

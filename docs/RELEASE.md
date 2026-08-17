@@ -128,7 +128,11 @@ The Microsoft Edge Add-ons Update REST API can update an existing product packag
 - `EDGE_ADDONS_API_KEY`
 - `EDGE_ADDONS_PRODUCT_ID`
 
-Require an independent environment reviewer and restrict deployment to the protected release-tag policy. The publisher must download and verify the immutable GitHub Release ZIP instead of rebuilding it. API keys must never be printed or committed.
+Keep `EDGE_ADDONS_CERTIFICATION_NOTES` as an environment variable. Keep the repository-level controls `EDGE_ADDONS_AUTOMATION_ENABLED` and `EDGE_ADDONS_MANUAL_SUBMISSION_TAG` outside the environment because the job-level eligibility check runs before environment variables are available.
+
+Set the repository variable `EDGE_ADDONS_AUTOMATION_ENABLED` to `true` only after the existing product and API credentials are ready. When a version was already submitted manually, set `EDGE_ADDONS_MANUAL_SUBMISSION_TAG` to that exact `vX.Y.Z` tag so a rerun cannot submit the same version through the API. Later tags remain eligible.
+
+Restrict environment deployment to `main` and the protected `v*` release-tag policy; add an independent environment reviewer when a separate trusted reviewer is operationally available. The publisher rebuilds and verifies the exact tag as a candidate, downloads the immutable GitHub Release ZIP and checksum, proves both copies are byte-for-byte identical, and uploads the GitHub Release copy. An Edge-only retry fails closed if the immutable GitHub Release or either matching asset is absent. API keys must never be printed or committed.
 
 ## Release-State Language
 
