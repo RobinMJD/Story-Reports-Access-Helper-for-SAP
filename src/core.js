@@ -35,6 +35,8 @@ export const SUCCESSFACTORS_HOST_SUFFIXES = Object.freeze([
 const DIRECT_WORKFLOW_STATUSES = new Set(["direct-preparing", "direct-resuming"]);
 const RESULT_CODES = new Set([
   "idle",
+  "page-refreshing",
+  "page-prepared",
   "continuation-in-progress",
   "replay-scheduled",
   "automatic-fix-blocked",
@@ -66,8 +68,15 @@ export function parseSuccessFactorsOrigin(value) {
 }
 
 export function isExactStoryReportUrl(value) {
+  if (!isSupportedReportCenterUrl(value)) return false;
+  const url = new URL(String(value));
+  return url.hash === STORY_REPORT_HASH;
+}
+
+export function isSupportedReportCenterUrl(value) {
   const url = parseHttpsUrl(value);
-  if (!url || url.pathname !== STORY_REPORT_PATH || url.search || url.hash !== STORY_REPORT_HASH) return false;
+  if (!url || url.pathname !== STORY_REPORT_PATH || url.search) return false;
+  if (url.hash && !url.hash.startsWith("#/")) return false;
   const hostname = url.hostname.toLowerCase();
   if (IAS_PARENT_DOMAINS.some((parent) => hostname === parent || hostname.endsWith(`.${parent}`))) return false;
   return SUCCESSFACTORS_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
@@ -189,7 +198,7 @@ export function makeActivationRecoveryAttempt(
     !isSafeExtensionVersion(version) ||
     !Number.isFinite(at) ||
     at <= 0 ||
-    !["reload-pending", "reload-attempted"].includes(phase)
+    !["reload-scheduled", "reload-pending", "reload-attempted"].includes(phase)
   ) return null;
   return { tabId, version, at, phase };
 }

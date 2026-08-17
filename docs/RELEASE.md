@@ -56,14 +56,14 @@ The versioned artifact name is:
 release/story-reports-access-helper-for-sap-vX.Y.Z-microsoft-edge-addons.zip
 ```
 
-## First Microsoft Edge Add-ons Publication
+## Microsoft Edge Add-ons Manual Submission
 
-Microsoft's first-publication flow is managed in Partner Center and may change. At submission time, follow the current official [Microsoft Edge publication guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension) and recheck the [developer policies](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies).
+Microsoft's publication flow is managed in Partner Center and may change. At submission time, follow the current official [Microsoft Edge publication guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension) and recheck the [developer policies](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies).
 
 ### Package
 
-1. Create a new extension product in the Edge workspace.
-2. Upload the exact v1.0.0 ZIP recorded in `docs/VALIDATION.md`.
+1. For a first release, create a new extension product in the Edge workspace; for an update, use the existing product.
+2. Upload the exact `vX.Y.Z` ZIP recorded as the current candidate in `docs/VALIDATION.md`.
 3. Stop if Partner Center reports a manifest, permission, package, or policy error. Do not patch the ZIP manually in a temporary directory; fix source, rebuild, reverify, and repeat acceptance.
 
 ### Availability And Properties
@@ -98,7 +98,8 @@ Use the certification sequence from [STORE_LISTING.md](STORE_LISTING.md). It mus
 - the single SAP Story Reports purpose;
 - the required broad `contentSettings` warning and exact-pair restriction;
 - the hard non-renewing 60-minute expiry;
-- the safe one-refresh recovery for a pre-install active Story page;
+- the safe one-refresh recovery for an active Report Center page after install, a same-build service-worker start or re-enable, tab activation, URL change, or page completion;
+- the contextual popup check and bounded **Fix this report** fallback, including its result-before-refresh behavior, 30-second repeat guard, and no cookie clearing;
 - at-most-once SAP continuation;
 - the standard SAP host-family boundary and custom-domain exclusion;
 - the fixed SAP KBA 3039244 help link;

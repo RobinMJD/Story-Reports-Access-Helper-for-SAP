@@ -8,8 +8,8 @@ const packageJson = readJson("package.json");
 
 assert(manifest.manifest_version === 3, "manifest_version must be 3");
 assert(manifest.version === packageJson.version, "manifest and package versions must match");
-assert(manifest.version === "1.0.0", "the verified source must be v1.0.0");
-assert(manifest.version_name === "1.0.0", "the verified release label must be v1.0.0");
+assert(manifest.version === "1.1.0", "the verified source must be v1.1.0");
+assert(manifest.version_name === "1.1.0", "the verified release label must be v1.1.0");
 assert(manifest.incognito === "not_allowed", "incognito must be explicitly disabled");
 assert(
   JSON.stringify(manifest.permissions) === JSON.stringify(["storage", "alarms", "contentSettings"]),
@@ -106,6 +106,7 @@ const iasContent = readFileSync(new URL("src/ias-content.js", projectRoot), "utf
 const sfActivation = readFileSync(new URL("src/sf-activation.js", projectRoot), "utf8");
 const popup = readFileSync(new URL("src/popup.js", projectRoot), "utf8");
 const popupHtml = readFileSync(new URL("src/popup.html", projectRoot), "utf8");
+const popupCss = readFileSync(new URL("src/popup.css", projectRoot), "utf8");
 const runtime = `${background}\n${core}\n${iasContent}\n${sfActivation}\n${popup}`;
 
 for (const legacy of [
@@ -152,23 +153,63 @@ assert(core.includes("secondaryPattern: `https://${sourceUrl.hostname}:443/*`"),
 assert(!/[`'"]https:\/\/\*\.(?:accounts|successfactors|sapsf|sapcloud|cloud\.sap)/.test(core), "cookie exceptions must never use wildcard parent domains");
 assert(!core.includes("<all_urls>"), "cookie exceptions must never use all-URL scope");
 
-assert(background.includes('const SF_ACTIVATION_BUILD = "1.0.0"'), "background activation build must be current");
-assert(sfActivation.includes('const BUILD = "1.0.0"'), "top-frame activation build must be current");
+assert(background.includes('const SF_ACTIVATION_BUILD = "1.1.0"'), "background activation build must be current");
+assert(sfActivation.includes('const BUILD = "1.1.0"'), "top-frame activation build must be current");
 assert(sfActivation.includes('const PROTOCOL = 1'), "top-frame activation protocol must be explicit");
 assert(!/\b(?:document|fetch|XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/.test(sfActivation), "activation marker must not inspect page data or use storage/network APIs");
 assert(background.includes("chrome.runtime.onInstalled.addListener"), "install recovery listener is required");
 assert(background.includes("chrome.tabs.onActivated.addListener"), "re-enable activation recovery listener is required");
+assert(background.includes("chrome.tabs.onUpdated.addListener"), "same-tab Report Center navigation recovery listener is required");
+assert(
+  background.includes("startupActivationScanDecisionPromise") &&
+    background.includes("shouldScan ? evaluateActiveReportCenterTabs() : undefined"),
+  "worker initialization must inspect the active Report Center page"
+);
 assert(background.includes("lastFocusedWindow: true"), "install recovery must target only the focused window");
-assert(background.includes("isExactStoryReportUrl(tab.url)"), "recovery must validate the exact Story route");
+assert(background.includes("url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS"), "active scans must remain limited to Report Center URLs");
+assert(background.includes("isSupportedReportCenterUrl(tab.url)"), "recovery must validate the exact Report Center path");
+assert(core.includes("export function isSupportedReportCenterUrl"), "core must validate supported Report Center routes centrally");
 assert(background.includes("chrome.windows.get(windowId)"), "recovery must verify actual window focus");
 assert(background.includes("state.activationAttempts.push(attempt)"), "recovery must persist a write-ahead tombstone");
 assert(background.includes("chrome.tabs.reload(tabId, { bypassCache: false })"), "recovery must use one normal reload");
-assert((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length === 1, "there must be exactly one reviewed tab reload call site");
+assert((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length === 2, "automatic and manual recovery must be the only tab reload call sites");
+assert(
+  (background.match(/chrome\.tabs\.reload\([^\n]+\{ bypassCache: false \}\)/g) || []).length === 2,
+  "every recovery reload must preserve the browser cache"
+);
 assert(!/chrome\.tabs\.(?:create|remove)\s*\(/.test(background), "recovery must never create or remove tabs");
 assert(!manifest.permissions.includes("tabs"), "the broad tabs permission is forbidden");
 assert(!manifest.permissions.includes("scripting"), "the scripting permission is forbidden");
 assert(!manifest.permissions.includes("management"), "the management permission is forbidden");
 assert(!manifest.permissions.includes("webNavigation"), "the webNavigation permission is forbidden");
+assert(!manifest.host_permissions.includes("<all_urls>"), "all-URL host access is forbidden");
+
+assert(background.includes('message.type === "force-fix-current-tab"'), "the bounded manual fix message is required");
+assert(background.includes("return handleForceFixCurrentTab()"), "the trusted popup must delegate manual recovery to the service worker");
+assert(background.includes("const MANUAL_FIX_COOLDOWN_MS = 30_000"), "manual repeat protection must retain its 30-second cooldown");
+assert(background.includes("const MANUAL_RELOAD_DELAY_MS = 1_200"), "manual recovery must retain a short bounded UI acknowledgement delay");
+assert(
+  /message\.type === "force-fix-current-tab" && hasExactKeys\(message, \["type"\]\)/.test(background),
+  "manual fix requests must accept only the exact one-field message"
+);
+assert(
+  /message\.type === "force-fix-current-tab"[\s\S]{0,240}isTrustedPopupSender\(sender\)/.test(background),
+  "manual fix requests must be restricted to the trusted popup"
+);
+assert(
+  background.includes("state.recent = state.recent.filter((entry) => entry.sourceTabId !== currentTab.id)"),
+  "manual recovery may clear only stale terminal records for the active tab"
+);
+assert(
+  /const remainingAttempts = state\.activationAttempts\.filter\([\s\S]{0,120}attempt\.tabId !== currentTab\.id/.test(background) &&
+    background.includes("state.activationAttempts = [...remainingAttempts, attempt]"),
+  "manual recovery may clear only stale activation records for the active tab"
+);
+assert(background.includes("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId)"), "manual reload must use the delayed claimed-tab path");
+assert(background.includes("async function performClaimedReportCenterReload"), "the delayed reload must revalidate its durable claim");
+assert(background.includes("assessActiveAllowanceForTab"), "fixed status must assess the exact current browser rule");
+assert(background.includes('effective?.setting === "allow"'), "fixed status must require an effective allow rule");
+assert(background.includes('return "check-unavailable"'), "an unverifiable browser rule must fail closed in public status");
 
 assert(core.includes("export const RELIABLE_RULE_TTL_MS = 60 * 60 * 1000"), "allowance lifetime must have a hard 60-minute ceiling");
 assert(core.includes("export const MAX_RELIABLE_PAIRS = 20"), "the local allowance ledger must be capped at 20 pairs");
@@ -196,10 +237,15 @@ assert(
 );
 assert(background.includes('hasExactKeys(message, ["type"])'), "the popup status request must accept only an exact message shape");
 assert(background.includes("isTrustedPopupSender(sender)"), "popup status access must be restricted to the trusted popup");
+assert(background.includes("canFixCurrentPage"), "public status must state whether the current page can be fixed");
+assert(background.includes("currentPageState"), "public status must expose only a sanitized current-page state");
 
 assert(core.includes('export const STATE_KEY = "sapIasStorageAccessWorkflows.v9"'), "session state must use the v9 phased recovery schema");
 assert(core.includes("export const STATE_VERSION = 9"), "session state version must be 9");
-assert(core.includes('["reload-pending", "reload-attempted"]'), "recovery markers must have exact pending and terminal phases");
+assert(
+  core.includes('["reload-scheduled", "reload-pending", "reload-attempted"]'),
+  "recovery markers must have exact scheduled, pending, and terminal phases"
+);
 assert(sfActivation.includes('type: "sf-activation-ready"'), "a newly loaded top document must announce the current activation marker");
 assert(background.includes("handleStoryActivationReady(message, sender)"), "the background must authenticate the post-reload marker transition");
 assert(
@@ -249,9 +295,30 @@ assert(!/<(?:input|select|textarea)\b/i.test(popupHtml), "the popup must not col
 assert(!/\b(?:IAS|contentSettings|cookie|origin|replay|durable|reliable mode|recovery)\b/i.test(popupHtml), "the popup must not expose technical setup terminology");
 assert(!/chrome\.permissions\.(?:request|remove)\s*\(/.test(popup), "required automatic mode must not expose a runtime permission setup flow");
 assert(!/\b(?:pause|resume)\b/i.test(popupHtml), "the popup must not expose removed Pause or Resume controls");
-assert((popupHtml.match(/<button\b/g) || []).length === 1, "the SAP help action must be the popup's only button");
+assert((popupHtml.match(/<button\b/g) || []).length === 2, "the popup must contain only the manual fix and SAP help actions");
+assert(popupHtml.includes('id="status-title">Checking this page…'), "the popup must begin with a visible checking state");
+assert(popupHtml.includes('id="status-card"') && popupHtml.includes('aria-busy="true"'), "the initial status must be marked busy");
+assert(popupHtml.includes('id="fix-action" hidden'), "the manual action must start hidden until the page check completes");
+assert(/\.status-dot\.checking\s*\{[^}]*animation:/s.test(popupCss), "the checking state must have a visible animation");
+assert(/@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none/s.test(popupCss), "the checking animation must respect reduced-motion preferences");
+assert(popupHtml.includes('id="fix-report"'), "the popup must expose one clearly identified manual fix action");
+assert(popupHtml.includes("Fix this report"), "the manual fix action must use plain end-user wording");
 assert(popupHtml.includes('id="sap-help"'), "the popup must expose one clearly identified SAP help action");
 assert(popupHtml.includes("Open SAP help article"), "the SAP help action must use plain end-user wording");
+assert(popupHtml.includes("No report data sent"), "the popup must state its local data boundary in plain language");
+assert(popup.includes('fixed: ["Fix applied"'), "the popup must distinguish a completed fix from readiness");
+assert(popup.includes('idle: ["No fix applied yet"'), "the popup must say clearly when no fix has been applied");
+assert(
+  popup.includes('if (code === "replay-scheduled" || code === "fix-already-applied") return "fixed"'),
+  "only a durable replay or verified active fix may be presented as Fix applied"
+);
+assert(
+  popup.includes('sendRuntimeMessage({ type: "force-fix-current-tab" })'),
+  "the manual action must delegate one exact force-fix request to the service worker"
+);
+assert(popup.includes("status.canFixCurrentPage"), "the popup must gate the manual action on the current-page capability");
+assert(popup.includes('if (state === "unavailable") return true'), "the manual fallback must remain available when status checking is unavailable");
+assert(popup.includes("setFixVisibility(shouldShowFix(status))"), "known runtime states must explicitly show or hide the manual action");
 assert(
   popup.includes('const SAP_KB_URL = "https://userapps.support.sap.com/sap/support/knowledge/en/3039244"'),
   "the popup must pin the exact public SAP KBA 3039244 URL"

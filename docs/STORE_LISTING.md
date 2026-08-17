@@ -1,6 +1,6 @@
 # Microsoft Edge Add-ons Listing Source
 
-This file is the source of truth for the English Microsoft Edge Add-ons listing, Privacy page, Properties page, and certification notes for version 1.0.0. Review it against the exact upload ZIP before submission.
+This file is the source of truth for the English Microsoft Edge Add-ons listing, Privacy page, Properties page, and certification notes for version 1.1.0. Review it against the exact upload ZIP before submission.
 
 **Release-state boundary:** prepared listing copy is not proof of Partner Center submission, certification, approval, or live Microsoft Edge Add-ons availability.
 
@@ -45,8 +45,9 @@ What it does:
 - Detects SAP's exact storage-access flow only inside a supported SuccessFactors Story Report.
 - Prepares a temporary browser allowance only for the matching SAP Identity Authentication and SuccessFactors sites.
 - Verifies that exact setting before allowing the already-started SAP sign-in to continue once.
-- Automatically refreshes one exact active Story page if it was already open before installation or re-enablement.
-- Shows one short, nontechnical status in the popup.
+- Detects an older active Report Center document after installation, a same-build service-worker start (including re-enablement), tab activation, page completion, or same-tab SAP navigation, and refreshes that exact page once when its current extension marker is missing.
+- Checks the active page when the popup opens and provides **Fix this report** only when a retry is applicable, with a safe fail-closed fallback if that check is unavailable.
+- Shows whether no fix has been needed yet, the extension is working, the page is prepared, or the browser fix was applied.
 - Opens SAP KBA 3039244 from a dedicated help button when additional guidance is needed.
 - Removes extension-owned temporary allowances automatically after a hard, non-renewing maximum of 60 minutes.
 
@@ -85,7 +86,7 @@ Microsoft Edge displays a broad warning because this API can control several cat
 
 **`storage` — required**
 
-Holds bounded local workflow and automatic-cleanup metadata. Session state contains browser identifiers, validated origins, timestamps, status codes, opaque one-use continuation identifiers, and a one-refresh record that contains only tab ID, build version, state, and timestamp. Trusted local storage holds at most twenty validated origin pairs, their exact HTTPS patterns, and creation/expiry timestamps. Nothing is synchronized or sent to the developer.
+Holds bounded local workflow and automatic-cleanup metadata. Session state contains browser identifiers, validated origins, timestamps, status codes, opaque one-use continuation identifiers, and a one-refresh record that contains only tab ID, build version, state, and timestamp. Trusted local storage holds one current extension build/version marker, used only to distinguish a same-build service-worker start from a version transition, plus at most twenty validated origin pairs, their exact HTTPS patterns, and creation/expiry timestamps. Nothing is synchronized or sent to the developer.
 
 **`alarms` — required**
 
@@ -105,7 +106,9 @@ It proceeds only when the browser-provided top ancestor belongs to a reviewed st
 
 **Website access — standard SAP SuccessFactors host families**
 
-The extension processes only a matching active tab address and a DOM-free build/protocol marker on the exact Report Center path. If a Story execution document predates installation or re-enablement, one session-only write-ahead record permits one ordinary cache-preserving refresh. Background and unrelated tabs are untouched, and the refresh is never retried. The extension does not read the page title, report list, report DOM, report identifiers, or report contents.
+The extension processes only a matching active tab address and a DOM-free build/protocol marker on the exact Report Center path. It evaluates that path after installation, on a same-build service-worker start (including re-enablement), on tab activation, and on Microsoft Edge URL-change or page-completion events. If that Report Center document predates extension loading, or the user reaches it through same-tab SAP navigation, one session-only write-ahead record permits one ordinary cache-preserving refresh. Background and unrelated tabs are untouched, and the automatic refresh does not loop. A version transition records the new build but skips the immediate generic startup scan so it does not disrupt an older exact-document continuation.
+
+The popup requests only a contextual status and capability result. **Fix this report** is hidden when the current page is unsupported, loading, prepared, working, or already fixed. If the availability check cannot complete, the popup may show the fallback, but the service worker still validates the active supported Report Center page and fails closed when it cannot prove the boundary. An accepted request is durably recorded, its result is returned for display, and then at most one ordinary cache-preserving refresh occurs. A 30-second repeat guard prevents rapid repeated refreshes. The action does not clear cookies or unrelated settings. The extension does not read the page title, report list, report DOM, report identifiers, or report contents.
 
 The reviewed SuccessFactors families include `successfactors.com`, `successfactors.eu`, `successfactors.cn`, `sapsf.com`, `sapsf.eu`, `sapsf.cn`, `hr.cloud.sap`, and `sapcloud.cn`. This is a code-level host-family boundary, not a claim that every tenant in every family has been live-tested.
 
@@ -151,24 +154,26 @@ No customer, tenant, company, account, or report input is required. A real suppo
 
 Suggested review sequence:
 
-1. Install the exact v1.0.0 package in a normal current Microsoft Edge profile and review the required `contentSettings` and standard-SAP website-access permissions.
+1. Install the exact v1.1.0 package in a normal current Microsoft Edge profile and review the required `contentSettings` and standard-SAP website-access permissions.
 2. Open a supported SuccessFactors Story Report that reaches SAP's IAS storage-access interstitial.
 3. Confirm that the extension creates and verifies only one exact IAS-primary/SuccessFactors-secondary HTTPS/default-port cookie allowance, without reading cookie or SAP form values.
 4. Confirm that the same IAS document continues at most once only after a durable document-bound commit.
-5. Open an exact Story execution page before installing or enabling the extension. After installation, confirm that only that active exact page receives one ordinary refresh; background, Report Center home, and unrelated tabs remain untouched.
-6. Activate the same page again and confirm no second refresh or duplicate IAS continuation occurs.
-7. Confirm that malformed pages, unsupported hosts, private windows, changed documents, ineffective settings, and policy overrides stop without broadening access or retrying.
-8. Confirm that an extension-owned exact allowance expires no later than 60 minutes after creation and is not renewed by reuse.
-9. Select **Open SAP help article** and confirm that it opens exactly `https://userapps.support.sap.com/sap/support/knowledge/en/3039244` in a new tab without extension or customer data in the URL.
-10. Inspect permissions and source: there is no Cookies API, `tabs` permission, history, `webRequest`, `scripting`, `management`, `webNavigation`, debugger, arbitrary broad host, or `<all_urls>` permission.
+5. Open Report Center before installing or enabling the extension. Confirm that the active supported page receives at most one ordinary refresh whether it is on Report Center home, is still loading, or later changes route through same-tab SAP navigation. Repeat for a same-build service-worker start, tab activation, URL change, and page completion. Confirm that a version transition skips the immediate generic startup scan.
+6. Activate the same page again and confirm no automatic second refresh or duplicate IAS continuation occurs.
+7. Open the popup and confirm its animated contextual check. Confirm **Fix this report** is hidden on unsupported, loading, prepared, working, and fixed states; if the check is unavailable, confirm the displayed fallback still fails closed unless background validation succeeds.
+8. With a supported Report Center page active and no continuation in progress, select **Fix this report**. Confirm that its result appears before one normal refresh, no cookie clearing or unrelated-tab action occurs, and a repeat inside 30 seconds is refused.
+9. Confirm that malformed pages, unsupported hosts, private windows, changed documents, ineffective settings, and policy overrides stop without broadening access or retrying.
+10. Confirm that an extension-owned exact allowance expires no later than 60 minutes after creation and is not renewed by reuse.
+11. Select **Open SAP help article** and confirm that it opens exactly `https://userapps.support.sap.com/sap/support/knowledge/en/3039244` in a new tab without extension or customer data in the URL.
+12. Inspect permissions and source: there is no Cookies API, `tabs` permission, history, `webRequest`, `scripting`, `management`, `webNavigation`, debugger, arbitrary broad host, or `<all_urls>` permission.
 
-The popup status “Report access ready” means only that the extension completed its local exact-setting and at-most-once continuation step. It is not a claim that SAP authentication, authorization, network delivery, or Story rendering succeeded.
+The popup status **Fix applied** means only that the exact extension-owned browser setting is currently verified as effective for the active SuccessFactors site or that the extension durably recorded the local one-use continuation step for that tab. It is not a claim that SAP authentication, authorization, network delivery, or Story rendering succeeded.
 
 Do not include confidential tenant details, accounts, credentials, report names, HR data, or authentication traffic in certification notes.
 
 ## Submission Checklist
 
-- Exact v1.0.0 ZIP and SHA-256 recorded in `docs/VALIDATION.md`.
+- Exact v1.1.0 ZIP and SHA-256 recorded in `docs/VALIDATION.md`.
 - Source, unit, package, and loaded-Edge verification pass against that exact ZIP.
 - Public repository, support, issue, privacy, and security URLs resolve without authentication.
 - Manifest name and description match this listing source.

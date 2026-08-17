@@ -9,6 +9,7 @@ const content = readFileSync(new URL("../src/ias-content.js", import.meta.url), 
 const sfActivation = readFileSync(new URL("../src/sf-activation.js", import.meta.url), "utf8");
 const popupHtml = readFileSync(new URL("../src/popup.html", import.meta.url), "utf8");
 const popup = readFileSync(new URL("../src/popup.js", import.meta.url), "utf8");
+const popupCss = readFileSync(new URL("../src/popup.css", import.meta.url), "utf8");
 
 const IAS_MATCHES = [
   "https://*.accounts.ondemand.com/*",
@@ -38,8 +39,8 @@ test("manifest keeps required permissions narrow and limits SuccessFactors acces
   assert.equal(manifest.optional_permissions, undefined);
   assert.deepEqual(manifest.host_permissions, SF_HOST_PERMISSIONS);
   assert.equal(manifest.incognito, "not_allowed");
-  assert.equal(manifest.version, "1.0.0");
-  assert.equal(manifest.version_name, "1.0.0");
+  assert.equal(manifest.version, "1.1.0");
+  assert.equal(manifest.version_name, "1.1.0");
   assert.equal(manifest.content_scripts.length, 2);
   assert.deepEqual(manifest.content_scripts[0].matches, IAS_MATCHES);
   assert.equal(manifest.content_scripts[0].all_frames, true);
@@ -55,10 +56,11 @@ test("manifest keeps required permissions narrow and limits SuccessFactors acces
   assert.equal(manifest.permissions.includes("scripting"), false);
   assert.equal(manifest.permissions.includes("management"), false);
   assert.equal(manifest.permissions.includes("webNavigation"), false);
+  assert.equal(manifest.host_permissions.includes("<all_urls>"), false);
 });
 
-test("pre-existing Story recovery is marker-bound, focused, write-ahead, and one reload only", () => {
-  assert.match(sfActivation, /const BUILD = "1\.0\.0"/);
+test("pre-existing Report Center recovery covers startup and same-tab updates with bounded reload sites", () => {
+  assert.match(sfActivation, /const BUILD = "1\.1\.0"/);
   assert.match(sfActivation, /const PROTOCOL = 1/);
   assert.match(sfActivation, /window\.top !== window/);
   assert.match(sfActivation, /sender\?\.id !== chrome\.runtime\.id/);
@@ -68,18 +70,45 @@ test("pre-existing Story recovery is marker-bound, focused, write-ahead, and one
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(background, /details\?\.reason !== "install"/);
   assert.match(background, /chrome\.tabs\.onActivated\.addListener/);
+  assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
+  assert.match(background, /Object\.hasOwn\(changeInfo, "url"\)/);
+  assert.match(background, /changeInfo\.status !== "complete"/);
+  assert.match(background, /startupActivationScanDecisionPromise/);
+  assert.match(background, /shouldScan \? evaluateActiveReportCenterTabs\(\) : undefined/);
   assert.match(background, /lastFocusedWindow: true/);
-  assert.match(background, /url: SF_ACTIVE_STORY_QUERY_PATTERNS/);
-  assert.match(background, /isExactStoryReportUrl\(tab\.url\)/);
+  assert.match(background, /url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS/);
+  assert.match(background, /isSupportedReportCenterUrl\(tab\.url\)/);
+  assert.match(core, /export function isSupportedReportCenterUrl/);
   assert.match(background, /chrome\.windows\.get\(windowId\)/);
   assert.match(background, /browserWindow\.focused === true/);
   assert.match(background, /makeActivationRecoveryAttempt\(tabId, SF_ACTIVATION_BUILD\)/);
   assert.match(background, /chrome\.tabs\.reload\(tabId, \{ bypassCache: false \}\)/);
-  assert.equal((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length, 1);
+  assert.equal((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length, 2);
+  assert.equal((background.match(/chrome\.tabs\.reload\([^\n]+\{ bypassCache: false \}\)/g) || []).length, 2);
   assert.doesNotMatch(background, /chrome\.tabs\.(?:create|remove)\s*\(/);
   const claim = background.indexOf("state.activationAttempts.push(attempt)");
   const reload = background.indexOf("chrome.tabs.reload(tabId, { bypassCache: false })");
   assert.ok(claim >= 0 && reload > claim, "recovery tombstone must precede reload");
+});
+
+test("manual fix is trusted, current-page bound, cooldown protected, and performs one normal reload per attempt", () => {
+  assert.match(background, /message\.type === "force-fix-current-tab" && hasExactKeys\(message, \["type"\]\)/);
+  assert.match(background, /message\.type === "force-fix-current-tab"[\s\S]{0,240}isTrustedPopupSender\(sender\)/);
+  assert.match(background, /return handleForceFixCurrentTab\(\)/);
+  assert.match(background, /const MANUAL_FIX_COOLDOWN_MS = 30_000/);
+  assert.match(background, /const MANUAL_RELOAD_DELAY_MS = 1_200/);
+  assert.match(background, /canFixCurrentPage/);
+  assert.match(background, /currentPageState/);
+  assert.match(background, /state\.recent = state\.recent\.filter\(\(entry\) => entry\.sourceTabId !== currentTab\.id\)/);
+  assert.match(background, /const remainingAttempts = state\.activationAttempts\.filter\([\s\S]{0,120}attempt\.tabId !== currentTab\.id/);
+  assert.match(background, /state\.activationAttempts = \[\.\.\.remainingAttempts, attempt\]/);
+  assert.match(background, /scheduleClaimedReportCenterReload\(currentTab\.id, currentTab\.windowId\)/);
+  assert.match(background, /async function performClaimedReportCenterReload/);
+  assert.match(background, /assessActiveAllowanceForTab/);
+  assert.match(background, /effective\?\.setting === "allow"/);
+  assert.match(background, /return "check-unavailable"/);
+  assert.equal((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length, 2);
+  assert.doesNotMatch(background, /setInterval\s*\(/);
 });
 
 test("IAS detection is nested-frame only and never intercepts a top-level SAP helper page", () => {
@@ -185,6 +214,25 @@ test("popup help opens only the fixed public SAP KBA without broad tabs permissi
   assert.match(popup, /chrome\.tabs\.create\(\{ url: SAP_KB_URL \}\)/);
   assert.equal((popup.match(/chrome\.tabs\.create\s*\(/g) || []).length, 1);
   assert.equal(manifest.permissions.includes("tabs"), false);
+});
+
+test("popup offers one bounded manual fix with clear non-technical status", () => {
+  assert.match(popupHtml, /id="status-title">Checking this page…/);
+  assert.match(popupHtml, /id="status-card"[\s\S]*aria-busy="true"/);
+  assert.match(popupHtml, /id="fix-action" hidden/);
+  assert.match(popupCss, /\.status-dot\.checking\s*\{[^}]*animation:/s);
+  assert.match(popupCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none/s);
+  assert.match(popupHtml, /id="fix-report"/);
+  assert.match(popupHtml, /Fix this report/);
+  assert.match(popupHtml, /No report data sent/);
+  assert.equal((popupHtml.match(/<button\b/g) || []).length, 2);
+  assert.match(popup, /sendRuntimeMessage\(\{ type: "force-fix-current-tab" \}\)/);
+  assert.match(popup, /fixed: \["Fix applied"/);
+  assert.match(popup, /idle: \["No fix applied yet"/);
+  assert.match(popup, /if \(code === "replay-scheduled" \|\| code === "fix-already-applied"\) return "fixed"/);
+  assert.match(popup, /status\.canFixCurrentPage/);
+  assert.match(popup, /if \(state === "unavailable"\) return true/);
+  assert.match(popup, /setFixVisibility\(shouldShowFix\(status\)\)/);
 });
 
 test("popup contains no tenant setup or technical recovery surface", () => {

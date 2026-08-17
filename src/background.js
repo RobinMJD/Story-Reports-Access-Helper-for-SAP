@@ -9,7 +9,7 @@ import {
   STORY_REPORT_PATH,
   SUCCESSFACTORS_HOST_SUFFIXES,
   createEmptyReliableLedger,
-  isExactStoryReportUrl,
+  isSupportedReportCenterUrl,
   isSafeResumeAttemptId,
   isSameWorkflow,
   makeCookieExceptionPair,
@@ -26,10 +26,13 @@ import {
 const RELIABLE_RETRY_MS = 60_000;
 const CONTENT_SETTINGS_PERMISSION = Object.freeze({ permissions: ["contentSettings"] });
 const LEGACY_RELIABLE_CONTROL_KEY = "sapIasReliableModeControl.v1";
-const SF_ACTIVATION_BUILD = "1.0.0";
+const SF_ACTIVATION_BUILD_KEY = "sapStoryAccessActivationBuild.v1";
+const SF_ACTIVATION_BUILD = "1.1.0";
 const SF_ACTIVATION_PROTOCOL = 1;
 const SF_ACTIVATION_PROBE_TIMEOUT_MS = 750;
-const SF_ACTIVE_STORY_QUERY_PATTERNS = Object.freeze(
+const MANUAL_FIX_COOLDOWN_MS = 30_000;
+const MANUAL_RELOAD_DELAY_MS = 1_200;
+const SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS = Object.freeze(
   SUCCESSFACTORS_HOST_SUFFIXES.map(
     (suffix) => `https://*.${suffix.slice(1)}${STORY_REPORT_PATH}*`
   )
@@ -41,8 +44,18 @@ let reliableQueue = Promise.resolve();
 // Invoke this before registering listeners or starting any asynchronous ledger work.
 // storage.local is otherwise readable by content scripts in Chromium.
 const localLedgerAccessPromise = protectLocalLedger();
+const startupActivationScanDecisionPromise = recordActivationBuildAndDecideStartupScan();
 const initializationPromise = initializeBackground().catch(() => undefined);
 const startupRecoveryPromise = initializationPromise.then(resumePreparedWorkflows).catch(() => undefined);
+// A service worker can be started by re-enabling or updating the extension,
+// without an install event or a tab activation. Inspect the one active page so
+// a Report Center document that predates this worker can receive the sentinel.
+// A version transition skips this scan because session state was cleared and
+// an old exact-document continuation could still be in flight. The install
+// event retains its explicit scan, while same-build worker starts are safe.
+void Promise.all([startupRecoveryPromise, startupActivationScanDecisionPromise])
+  .then(([, shouldScan]) => shouldScan ? evaluateActiveReportCenterTabs() : undefined)
+  .catch(() => undefined);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // A preparing startup recovery needs its exact document to cross the commit
@@ -65,7 +78,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   if (!Number.isInteger(tabId) || tabId <= 0) return;
-  void startupRecoveryPromise.then(() => evaluateActivatedStoryTab(tabId)).catch(() => undefined);
+  void startupRecoveryPromise.then(() => evaluateReportCenterTabById(tabId)).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!Number.isInteger(tabId) || tabId <= 0 || !changeInfo || typeof changeInfo !== "object") return;
+  if (!Object.hasOwn(changeInfo, "url") && changeInfo.status !== "complete") return;
+  void startupRecoveryPromise.then(() => evaluateReportCenterTabById(tabId)).catch(() => undefined);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -79,7 +98,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details?.reason !== "install") return;
-  void startupRecoveryPromise.then(evaluateActiveStoryTabsAfterInstall).catch(() => undefined);
+  void startupRecoveryPromise.then(evaluateActiveReportCenterTabs).catch(() => undefined);
 });
 
 async function initializeBackground() {
@@ -115,23 +134,23 @@ async function retireInterruptedDirect(workflow) {
   await finalizeDirectWorkflow(workflow, "resume-interrupted");
 }
 
-async function evaluateActiveStoryTabsAfterInstall() {
+async function evaluateActiveReportCenterTabs() {
   if (!isCurrentActivationBuild()) return;
   let tabs;
   try {
     tabs = await chrome.tabs.query({
       active: true,
       lastFocusedWindow: true,
-      url: SF_ACTIVE_STORY_QUERY_PATTERNS
+      url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS
     });
   } catch {
     return;
   }
   if (!Array.isArray(tabs)) return;
-  for (const tab of tabs) await evaluateStoryTabForRecovery(tab);
+  for (const tab of tabs) await evaluateReportCenterTabForRecovery(tab);
 }
 
-async function evaluateActivatedStoryTab(tabId) {
+async function evaluateReportCenterTabById(tabId) {
   if (!isCurrentActivationBuild()) return;
   let tab;
   try {
@@ -139,11 +158,11 @@ async function evaluateActivatedStoryTab(tabId) {
   } catch {
     return;
   }
-  await evaluateStoryTabForRecovery(tab);
+  await evaluateReportCenterTabForRecovery(tab);
 }
 
-async function evaluateStoryTabForRecovery(tab) {
-  if (!isEligibleStoryTab(tab)) return;
+async function evaluateReportCenterTabForRecovery(tab) {
+  if (!isEligibleReportCenterTab(tab)) return;
   const state = await readStateAfterPendingWrites();
   const pendingAttempt = state.activationAttempts.find(
     (attempt) =>
@@ -185,7 +204,7 @@ async function coverPendingActivationAfterProbe(tabId) {
     } catch {
       return false;
     }
-    if (!isEligibleStoryTab(tab) || !await isFocusedNormalWindow(tab.windowId)) return false;
+    if (!isEligibleReportCenterTab(tab) || !await isFocusedNormalWindow(tab.windowId)) return false;
 
     const result = await markActivationReloadAttempted(tabId);
     return result.code === "sf-activation-ready";
@@ -202,7 +221,7 @@ async function claimAndReloadStoryTab(tabId) {
     } catch {
       return false;
     }
-    if (!isEligibleStoryTab(tab)) return false;
+    if (!isEligibleReportCenterTab(tab)) return false;
     if (!await isFocusedNormalWindow(tab.windowId)) return false;
 
     const claimed = await mutateState((state) => {
@@ -211,6 +230,7 @@ async function claimAndReloadStoryTab(tabId) {
       const attempt = makeActivationRecoveryAttempt(tabId, SF_ACTIVATION_BUILD);
       if (!attempt) return false;
       state.activationAttempts.push(attempt);
+      state.lastStatus = makeLastStatus("page-refreshing");
       return true;
     });
     if (!claimed) return false;
@@ -226,7 +246,7 @@ async function claimAndReloadStoryTab(tabId) {
       return false;
     }
     if (
-      !isEligibleStoryTab(finalTab) ||
+      !isEligibleReportCenterTab(finalTab) ||
       finalTab.windowId !== tab.windowId ||
       !await isFocusedNormalWindow(finalTab.windowId)
     ) {
@@ -278,7 +298,7 @@ function isCurrentStoryActivationSentinel(value) {
   );
 }
 
-function isEligibleStoryTab(tab) {
+function isEligibleReportCenterTab(tab) {
   return Boolean(
     tab &&
     Number.isInteger(tab.id) &&
@@ -289,7 +309,7 @@ function isEligibleStoryTab(tab) {
     tab.discarded !== true &&
     tab.frozen !== true &&
     !tab.pendingUrl &&
-    isExactStoryReportUrl(tab.url)
+    isSupportedReportCenterUrl(tab.url)
   );
 }
 
@@ -327,6 +347,10 @@ async function dispatchMessage(message, sender) {
   if (message.type === "get-status" && hasExactKeys(message, ["type"])) {
     if (!isTrustedPopupSender(sender)) return { code: "ignored" };
     return getPublicStatus();
+  }
+  if (message.type === "force-fix-current-tab" && hasExactKeys(message, ["type"])) {
+    if (!isTrustedPopupSender(sender)) return { code: "ignored" };
+    return handleForceFixCurrentTab();
   }
   if (
     message.type === "sf-activation-ready" &&
@@ -377,6 +401,7 @@ function markActivationReloadAttempted(tabId) {
     );
     if (!attempt) return { code: "ignored" };
     attempt.phase = "reload-attempted";
+    state.lastStatus = makeLastStatus("page-prepared");
     return { code: "sf-activation-ready" };
   });
 }
@@ -391,7 +416,7 @@ function isExactStoryActivationSender(sender) {
     sender.tab.incognito !== true &&
     sender.frameId === 0 &&
     isSafeSourceDocumentId(sender.documentId) &&
-    isExactStoryReportUrl(sender.url)
+    isSupportedReportCenterUrl(sender.url)
   );
 }
 
@@ -406,7 +431,7 @@ function isSameCurrentStoryDocument(sender, tab) {
     tab.discarded === true ||
     tab.frozen === true ||
     tab.pendingUrl ||
-    !isExactStoryReportUrl(tab.url)
+    !isSupportedReportCenterUrl(tab.url)
   ) return false;
   try {
     return new URL(sender.url).origin === new URL(tab.url).origin;
@@ -508,7 +533,7 @@ async function handleInterstitialDetected(message, sender) {
         (attempt) =>
           attempt.tabId === sender.tab.id &&
           attempt.version === SF_ACTIVATION_BUILD &&
-          attempt.phase === "reload-pending"
+          ["reload-scheduled", "reload-pending"].includes(attempt.phase)
       )
     ) {
       state.lastStatus = makeLastStatus("continuation-in-progress");
@@ -935,6 +960,20 @@ function protectLocalLedger() {
   }
 }
 
+async function recordActivationBuildAndDecideStartupScan() {
+  try {
+    if (!await localLedgerAccessPromise) return false;
+    const stored = await chrome.storage.local.get(SF_ACTIVATION_BUILD_KEY);
+    const previousBuild = stored?.[SF_ACTIVATION_BUILD_KEY];
+    await chrome.storage.local.set({ [SF_ACTIVATION_BUILD_KEY]: SF_ACTIVATION_BUILD });
+    return previousBuild === SF_ACTIVATION_BUILD;
+  } catch {
+    // A missing durable decision fails closed. The exact install, activation,
+    // and navigation listeners can still recover a later user-visible page.
+    return false;
+  }
+}
+
 async function requireProtectedLocalStorage() {
   if (!await localLedgerAccessPromise) {
     throw new ReliableModeError("reliable-mode-storage-unavailable");
@@ -976,11 +1015,337 @@ async function setLastStatus(code) {
 }
 
 async function getPublicStatus() {
+  const context = await getActiveReportCenterContext();
   const state = await readStateAfterPendingWrites();
+  const allowance = context.tab
+    ? await assessActiveAllowanceForTab(context.tab)
+    : { active: false, available: true };
+  const code = contextualStatusCode(state, context, allowance);
   return {
-    code: state.lastStatus.code || "idle",
+    code,
     activeCount: state.workflows.length,
-    version: chrome.runtime.getManifest().version
+    version: chrome.runtime.getManifest().version,
+    canFixCurrentPage: canForceFixCurrentPage(state, context, allowance),
+    currentPageState: context.pageState
+  };
+}
+
+async function handleForceFixCurrentTab() {
+  let context;
+  try {
+    context = await getActiveReportCenterContext();
+    if (context.pageState === "unavailable") {
+      return makeManualResult("check-unavailable", context, false, 0);
+    }
+    if (!context.tab) return makeManualResult("wrong-page", context, false, 0);
+    if (context.pageState !== "ready") {
+      const state = await readStateAfterPendingWrites();
+      return makeManualResult("page-not-ready", context, false, state.workflows.length);
+    }
+
+    return await withReliableLock(async () => {
+      await requireProtectedLocalStorage();
+
+      let currentTab;
+      try {
+        currentTab = await chrome.tabs.get(context.tab.id);
+      } catch {
+        return makeManualResult("manual-fix-failed", context, false, 0);
+      }
+      if (!isSupportedReportCenterUrl(currentTab.url)) {
+        return makeManualResult("wrong-page", { tab: null, pageState: "unsupported" }, false, 0);
+      }
+      if (
+        !isEligibleReportCenterTab(currentTab) ||
+        currentTab.windowId !== context.tab.windowId ||
+        !await isFocusedNormalWindow(currentTab.windowId)
+      ) {
+        const state = await readStateAfterPendingWrites();
+        return makeManualResult("page-not-ready", { tab: currentTab, pageState: "loading" }, false, state.workflows.length);
+      }
+
+      const allowance = await assessActiveAllowanceForTab(currentTab);
+      if (!allowance.available) {
+        const state = await readStateAfterPendingWrites();
+        return makeManualResult("check-unavailable", context, false, state.workflows.length);
+      }
+
+      const claimed = await mutateState((state) => {
+        if (state.workflows.some((workflow) => workflow.sourceTabId === currentTab.id)) {
+          return { code: "fix-in-progress", activeCount: state.workflows.length };
+        }
+        if (state.activationAttempts.some(
+          (attempt) =>
+            attempt.tabId === currentTab.id &&
+            ["reload-scheduled", "reload-pending"].includes(attempt.phase)
+        )) {
+          return { code: "fix-in-progress", activeCount: state.workflows.length };
+        }
+        if (
+          allowance.active ||
+          state.recent.some(
+            (entry) => entry.sourceTabId === currentTab.id && entry.outcome === "replay-scheduled"
+          )
+        ) {
+          return { code: "fix-already-applied", activeCount: state.workflows.length };
+        }
+
+        const latestActivityAt = Math.max(
+          0,
+          ...state.recent
+            .filter((entry) => entry.sourceTabId === currentTab.id)
+            .map((entry) => entry.at),
+          ...state.activationAttempts
+            .filter((attempt) => attempt.tabId === currentTab.id)
+            .map((attempt) => attempt.at)
+        );
+        if (latestActivityAt && Date.now() - latestActivityAt < MANUAL_FIX_COOLDOWN_MS) {
+          return { code: "manual-fix-cooldown", activeCount: state.workflows.length };
+        }
+
+        // Only terminal records for this tab are cleared. Active workflows and
+        // uncertain pending reloads are never discarded by the manual action.
+        const remainingAttempts = state.activationAttempts.filter(
+          (attempt) => attempt.tabId !== currentTab.id
+        );
+        if (remainingAttempts.length >= MAX_ACTIVATION_RECOVERY_ATTEMPTS) {
+          return { code: "manual-fix-failed", activeCount: state.workflows.length };
+        }
+        const attempt = makeActivationRecoveryAttempt(
+          currentTab.id,
+          SF_ACTIVATION_BUILD,
+          Date.now(),
+          "reload-scheduled"
+        );
+        if (!attempt) return { code: "manual-fix-failed", activeCount: state.workflows.length };
+        state.recent = state.recent.filter((entry) => entry.sourceTabId !== currentTab.id);
+        state.activationAttempts = [...remainingAttempts, attempt];
+        state.lastStatus = makeLastStatus("page-refreshing");
+        return { code: "manual-refresh-started", activeCount: state.workflows.length };
+      });
+
+      if (claimed.code !== "manual-refresh-started") {
+        return makeManualResult(claimed.code, context, false, claimed.activeCount);
+      }
+
+      // Revalidate after the durable write-ahead claim. If focus or navigation
+      // changed, remove the new claim and do not touch the page now in the tab.
+      let finalTab;
+      try {
+        finalTab = await chrome.tabs.get(currentTab.id);
+      } catch {
+        await removeActivationAttempt(currentTab.id, SF_ACTIVATION_BUILD);
+        return makeManualResult("manual-fix-failed", context, false, claimed.activeCount);
+      }
+      if (
+        !isEligibleReportCenterTab(finalTab) ||
+        finalTab.windowId !== currentTab.windowId ||
+        !await isFocusedNormalWindow(finalTab.windowId)
+      ) {
+        await removeActivationAttempt(currentTab.id, SF_ACTIVATION_BUILD);
+        const nextState = isSupportedReportCenterUrl(finalTab.url) ? "loading" : "unsupported";
+        const code = nextState === "unsupported" ? "wrong-page" : "page-not-ready";
+        return makeManualResult(code, { tab: finalTab, pageState: nextState }, false, claimed.activeCount);
+      }
+
+      // Give the popup time to render the accepted result before the underlying
+      // page reload can close it. The delayed side effect revalidates again and
+      // remains covered by the already-durable one-shot claim.
+      scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId);
+      return makeManualResult(
+        "manual-refresh-started",
+        { tab: finalTab, pageState: "ready" },
+        false,
+        claimed.activeCount
+      );
+    });
+  } catch {
+    const state = await readStateAfterPendingWrites().catch(() => null);
+    return makeManualResult(
+      "manual-fix-failed",
+      context || { tab: null, pageState: "unsupported" },
+      false,
+      state?.workflows?.length || 0
+    );
+  }
+}
+
+function scheduleClaimedReportCenterReload(tabId, windowId) {
+  setTimeout(() => {
+    void performClaimedReportCenterReload(tabId, windowId).catch(() => undefined);
+  }, MANUAL_RELOAD_DELAY_MS);
+}
+
+async function performClaimedReportCenterReload(tabId, windowId) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
+    return;
+  }
+  const state = await readStateAfterPendingWrites();
+  const scheduled = state.activationAttempts.some(
+    (attempt) =>
+      attempt.tabId === tabId &&
+      attempt.version === SF_ACTIVATION_BUILD &&
+      attempt.phase === "reload-scheduled"
+  );
+  if (
+    !scheduled ||
+    tab.windowId !== windowId ||
+    !isEligibleReportCenterTab(tab) ||
+    !await isFocusedNormalWindow(tab.windowId)
+  ) {
+    if (scheduled) await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
+    return;
+  }
+
+  const claimed = await mutateState((current) => {
+    const attempt = current.activationAttempts.find(
+      (entry) =>
+        entry.tabId === tabId &&
+        entry.version === SF_ACTIVATION_BUILD &&
+        entry.phase === "reload-scheduled"
+    );
+    if (!attempt) return false;
+    attempt.phase = "reload-pending";
+    return true;
+  });
+  if (!claimed) return;
+
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
+    return;
+  }
+  if (
+    tab.windowId !== windowId ||
+    !isEligibleReportCenterTab(tab) ||
+    !await isFocusedNormalWindow(tab.windowId)
+  ) {
+    await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
+    return;
+  }
+  try {
+    await chrome.tabs.reload(tabId, { bypassCache: false });
+  } catch {
+    // The write-ahead claim remains authoritative after an ambiguous reload.
+  }
+}
+
+async function getActiveReportCenterContext() {
+  let tabs;
+  try {
+    tabs = await chrome.tabs.query({
+      active: true,
+      lastFocusedWindow: true,
+      url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS
+    });
+  } catch {
+    return { tab: null, pageState: "unavailable" };
+  }
+  const tab = Array.isArray(tabs)
+    ? tabs.find((candidate) => isSupportedReportCenterUrl(candidate?.url))
+    : null;
+  if (!tab) return { tab: null, pageState: "unsupported" };
+  if (!isEligibleReportCenterTab(tab)) return { tab, pageState: "loading" };
+  if (!await isFocusedNormalWindow(tab.windowId)) return { tab: null, pageState: "unsupported" };
+  return { tab, pageState: "ready" };
+}
+
+function contextualStatusCode(state, context, allowance) {
+  if (context.pageState === "unavailable") return "check-unavailable";
+  if (!context.tab) return "unsupported-page";
+  if (context.pageState !== "ready") return "page-not-ready";
+  const tabId = context.tab.id;
+  if (state.workflows.some((workflow) => workflow.sourceTabId === tabId)) {
+    return "continuation-in-progress";
+  }
+  const pending = state.activationAttempts.find(
+    (attempt) =>
+      attempt.tabId === tabId &&
+      ["reload-scheduled", "reload-pending"].includes(attempt.phase)
+  );
+  if (pending) return "page-refreshing";
+
+  const recent = [...state.recent].reverse().find((entry) => entry.sourceTabId === tabId);
+  if (recent?.outcome === "replay-scheduled") return "replay-scheduled";
+  if (allowance.active) return "replay-scheduled";
+  if (!allowance.available) return "check-unavailable";
+  if (recent) return recent.outcome;
+
+  const prepared = state.activationAttempts.find(
+    (attempt) => attempt.tabId === tabId && attempt.phase === "reload-attempted"
+  );
+  return prepared ? "page-prepared" : "idle";
+}
+
+function canForceFixCurrentPage(state, context, allowance, now = Date.now()) {
+  if (!context.tab || context.pageState !== "ready") return false;
+  const tabId = context.tab.id;
+  if (state.workflows.some((workflow) => workflow.sourceTabId === tabId)) return false;
+  if (state.activationAttempts.some(
+    (attempt) =>
+      attempt.tabId === tabId &&
+      ["reload-scheduled", "reload-pending"].includes(attempt.phase)
+  )) return false;
+  if (
+    allowance.active ||
+    !allowance.available ||
+    state.recent.some(
+      (entry) => entry.sourceTabId === tabId && entry.outcome === "replay-scheduled"
+    )
+  ) return false;
+  const latestActivityAt = Math.max(
+    0,
+    ...state.recent.filter((entry) => entry.sourceTabId === tabId).map((entry) => entry.at),
+    ...state.activationAttempts.filter((attempt) => attempt.tabId === tabId).map((attempt) => attempt.at)
+  );
+  return !latestActivityAt || now - latestActivityAt >= MANUAL_FIX_COOLDOWN_MS;
+}
+
+async function assessActiveAllowanceForTab(tab) {
+  if (!await localLedgerAccessPromise) return { active: false, available: false };
+  let sourceOrigin;
+  try {
+    sourceOrigin = parseSuccessFactorsOrigin(new URL(tab.url).origin);
+  } catch {
+    return { active: false, available: false };
+  }
+  if (!sourceOrigin) return { active: false, available: false };
+  let ledger;
+  try {
+    ledger = await readReliableLedger();
+  } catch {
+    return { active: false, available: false };
+  }
+  const entries = ledger.entries.filter((entry) => entry.sourceOrigin === sourceOrigin);
+  if (!entries.length) return { active: false, available: true };
+
+  let policyReadFailed = false;
+  for (const entry of entries) {
+    try {
+      const pair = makeCookieExceptionPair(entry.iasOrigin, entry.sourceOrigin);
+      const effective = await getEffectiveCookieSetting(pair);
+      if (effective?.setting === "allow") return { active: true, available: true };
+    } catch {
+      policyReadFailed = true;
+    }
+  }
+  return policyReadFailed
+    ? { active: false, available: false }
+    : { active: false, available: true };
+}
+
+function makeManualResult(code, context, canFixCurrentPage, activeCount) {
+  return {
+    code,
+    activeCount,
+    version: chrome.runtime.getManifest().version,
+    canFixCurrentPage,
+    currentPageState: context.pageState
   };
 }
 

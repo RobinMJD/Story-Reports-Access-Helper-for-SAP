@@ -10,7 +10,7 @@ test("the activation sentinel is top-frame-only and globally idempotent", () => 
   assert.equal(top.listeners.length, 1);
   assert.deepEqual(top.readyMessages, [{
     type: "sf-activation-ready",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1
   }]);
 
@@ -23,20 +23,20 @@ test("the sentinel answers only the same extension's exact current probe", () =>
   const { send } = runSentinel({ topFrame: true });
   assert.deepEqual(send({
     type: "sf-activation-probe",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1
   }), {
     type: "sf-activation-current",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1
   });
 
   for (const [message, senderId] of [
     [{ type: "sf-activation-probe", build: "0.3.0", protocol: 1 }, "extension-id"],
-    [{ type: "sf-activation-probe", build: "1.0.0", protocol: 2 }, "extension-id"],
-    [{ type: "sf-activation-probe", build: "1.0.0", protocol: 1, extra: true }, "extension-id"],
+    [{ type: "sf-activation-probe", build: "1.1.0", protocol: 2 }, "extension-id"],
+    [{ type: "sf-activation-probe", build: "1.1.0", protocol: 1, extra: true }, "extension-id"],
     [{ type: "sf-activation-probe", protocol: 1 }, "extension-id"],
-    [{ type: "sf-activation-probe", build: "1.0.0", protocol: 1 }, "different-extension"],
+    [{ type: "sf-activation-probe", build: "1.1.0", protocol: 1 }, "different-extension"],
     [null, "extension-id"]
   ]) {
     assert.equal(send(message, senderId), undefined, JSON.stringify(message));
@@ -44,7 +44,7 @@ test("the sentinel answers only the same extension's exact current probe", () =>
 });
 
 test("the sentinel is DOM-, storage-, and network-free", () => {
-  assert.match(source, /const BUILD = "1\.0\.0"/);
+  assert.match(source, /const BUILD = "1\.1\.0"/);
   assert.match(source, /const PROTOCOL = 1/);
   assert.doesNotMatch(source, /\bdocument\b/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|chrome\.storage/);

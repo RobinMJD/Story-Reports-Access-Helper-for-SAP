@@ -31,15 +31,21 @@ No parent-domain wildcard or `<all_urls>` rule is constructed. Each rule uses `r
 
 The cleanup ledger is protected with `storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"})` before use. If that protection, any state write, or the effective-setting verification cannot be established, the automatic fix stops.
 
-## Pre-Existing Story-Page Recovery
+## Pre-Existing Report-Center Recovery
 
 Static content scripts are not retroactively added to a document that predates extension installation or re-enablement. The extension therefore has narrow required host access to reviewed standard SuccessFactors families and a DOM-free top-frame marker on the exact Report Center path. The marker answers a local build/protocol probe and sends only build/protocol readiness when a new document loads.
 
-On initial installation, or when the user later activates an older Story execution tab after re-enablement or update, the background validates HTTPS/default port, approved hostname, exact Report Center path, exact Story route, active/complete regular-tab state, and absence of current workflow or recent continuation state.
+The background evaluates the exact active Report Center path after installation, on a same-build service-worker start (including re-enablement), on tab activation, and on `tabs.onUpdated` URL-change or page-completion events. It validates HTTPS/default port, approved hostname, exact Report Center path, active/complete regular-tab state, focused normal-window state, and absence of a current workflow or continuation conflict.
+
+A trusted-local marker contains only the current extension build/version. It allows a same-build service-worker start to scan the active page while a version transition skips that immediate generic startup scan so an older exact-document continuation is not disrupted. A later eligible activation, URL change, or page completion can still evaluate the page.
 
 Only an absent or stale compile-time marker can arm recovery. The tab and focused normal window are re-read and revalidated around a bounded `storage.session` write-ahead record containing only tab ID, build version, state, and timestamp. The extension then performs one ordinary `tabs.reload(tabId, {bypassCache: false})`. The newly loaded marker moves that record to a terminal state, allowing the new IAS document to proceed while preventing a second automatic refresh in that browser session.
 
-No background or unrelated tab is refreshed; no tab is focused, opened, or closed; cache is not bypassed; and the refresh is never retried. A Store update does not immediately reload the tab that was active at update time.
+No background or unrelated tab is refreshed; no tab is focused, opened, or closed; cache is not bypassed; and the automatic refresh never loops.
+
+The trusted popup first requests a contextual status and capability result. It hides **Fix this report** when the page is unsupported, loading, already prepared, already working, or fixed. If the availability check itself cannot complete, the popup may display the fallback, but the background still fails closed unless independent validation succeeds.
+
+For an accepted **Fix this report** request, the background independently locates and revalidates the current active supported Report Center tab, refuses an active continuation or any attempt inside the 30-second repeat guard, records a new write-ahead attempt, returns the result so the popup can display it, and then performs at most one cache-preserving refresh. It revalidates the durable claim immediately before that refresh. No URL, tab identifier, origin, or setting is accepted from the popup message. The action does not clear cookies, the allowance ledger, or unrelated browser settings.
 
 ## At-Most-Once SAP Continuation
 
@@ -67,11 +73,13 @@ Session state is bounded to browser identifiers, validated origins, timestamps, 
 
 The fixed **Open SAP help article** action opens only `https://userapps.support.sap.com/sap/support/knowledge/en/3039244` without adding query parameters, tenant information, or extension state.
 
+The popup status **Fix applied** requires either a currently effective exact extension-owned browser setting for the active SuccessFactors site or a durable local `replay-scheduled` result for that tab. It is not evidence of SAP authentication, authorization, network delivery, or Story rendering.
+
 ## Supported Hosts And Custom Domains
 
 Automatic host access is limited to the standard SAP parent domains listed in the README. Tenant labels are dynamic; no customer instance is hardcoded.
 
-SAP IAS also supports arbitrary custom domains. A public extension cannot silently verify ownership of an arbitrary hostname without broad web access, an external trust service, or a customer/admin allowlist. Version 1.0.0 deliberately avoids required `<all_urls>`, remote allowlists, DNS services, and console/debugger access. Custom domains therefore fail closed and require a separately validated exact allowlist or enterprise policy.
+SAP IAS also supports arbitrary custom domains. A public extension cannot silently verify ownership of an arbitrary hostname without broad web access, an external trust service, or a customer/admin allowlist. Version 1.1.0 deliberately avoids required `<all_urls>`, remote allowlists, DNS services, and console/debugger access. Custom domains therefore fail closed and require a separately validated exact allowlist or enterprise policy.
 
 ## Reporting A Security Issue
 
@@ -84,7 +92,7 @@ Never attach credentials, raw HAR authentication bodies, cookie databases, SAML/
 Before Microsoft Edge Add-ons submission:
 
 - all source, unit, package, and loaded-Edge tests must pass against the exact ZIP;
-- the exact v1.0.0 package must complete clean-profile and pre-install-page lifecycle acceptance;
+- the exact v1.1.0 package must complete clean-profile, pre-install-page, same-tab route-change, same-build service-worker start/re-enable, and manual-fallback acceptance;
 - Store text and privacy declarations must match the exact package;
 - public support, privacy, and security URLs must resolve from the final public repository;
 - GitHub private vulnerability reporting must be enabled for the public repository;

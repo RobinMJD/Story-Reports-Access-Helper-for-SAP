@@ -17,6 +17,7 @@ import {
   createEmptyReliableLedger,
   createEmptyState,
   isExactStoryReportUrl,
+  isSupportedReportCenterUrl,
   isSafeResumeAttemptId,
   isSameWorkflow,
   makeCookieExceptionPair,
@@ -82,28 +83,54 @@ test("Story Report activation URLs require an exact standard route on an allowed
   }
 });
 
+test("Report Center recovery accepts only the exact document path and its SAP hash routes", () => {
+  for (const route of ["", "#/home", "#/home?tab=myreports&view=reports", STORY_REPORT_HASH]) {
+    assert.equal(
+      isSupportedReportCenterUrl(`https://company.successfactors.eu${STORY_REPORT_PATH}${route}`),
+      true,
+      route
+    );
+  }
+  for (const value of [
+    `https://company.successfactors.eu${STORY_REPORT_PATH}?outside=hash#/home`,
+    `https://company.successfactors.eu${STORY_REPORT_PATH}#home`,
+    `https://company.successfactors.eu${STORY_REPORT_PATH}/extra#/home`,
+    `https://company.successfactors.eu.evil.example${STORY_REPORT_PATH}#/home`,
+    `https://company.successfactors.eu:8443${STORY_REPORT_PATH}#/home`,
+    `http://company.successfactors.eu${STORY_REPORT_PATH}#/home`
+  ]) {
+    assert.equal(isSupportedReportCenterUrl(value), false, value);
+  }
+});
+
 test("activation attempt tombstones are exact, deduplicated, future-rejecting, and bounded without eviction", () => {
   const now = 1_900_000_000_000;
-  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.0.0", now), {
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now), {
     tabId: 10,
-    version: "1.0.0",
+    version: "1.1.0",
     at: now,
     phase: "reload-pending"
   });
-  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.0.0", now, "reload-attempted"), {
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now, "reload-attempted"), {
     tabId: 10,
-    version: "1.0.0",
+    version: "1.1.0",
     at: now,
     phase: "reload-attempted"
   });
-  assert.equal(makeActivationRecoveryAttempt(0, "1.0.0", now), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.0.0-beta", now), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.0.0", 0), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.0.0", now, "unknown"), null);
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now, "reload-scheduled"), {
+    tabId: 10,
+    version: "1.1.0",
+    at: now,
+    phase: "reload-scheduled"
+  });
+  assert.equal(makeActivationRecoveryAttempt(0, "1.1.0", now), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0-beta", now), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0", 0), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0", now, "unknown"), null);
 
   const attempts = Array.from({ length: MAX_ACTIVATION_RECOVERY_ATTEMPTS + 2 }, (_, index) => ({
     tabId: index + 1,
-    version: "1.0.0",
+    version: "1.1.0",
     at: now - index,
     url: "https://must-not-survive.example",
     title: "must not survive",
@@ -114,10 +141,10 @@ test("activation attempt tombstones are exact, deduplicated, future-rejecting, a
     activationAttempts: [
       attempts[0],
       { ...attempts[0], at: now + 500 },
-      { tabId: -1, version: "1.0.0", at: now },
+      { tabId: -1, version: "1.1.0", at: now },
       { tabId: 500, version: "unsafe", at: now },
-      { tabId: 501, version: "1.0.0", at: 0 },
-      { tabId: 502, version: "1.0.0", at: now + 1 },
+      { tabId: 501, version: "1.1.0", at: 0 },
+      { tabId: 502, version: "1.1.0", at: now + 1 },
       ...attempts.slice(1)
     ]
   }, now);
@@ -125,7 +152,7 @@ test("activation attempt tombstones are exact, deduplicated, future-rejecting, a
   assert.equal(state.activationAttempts.length, MAX_ACTIVATION_RECOVERY_ATTEMPTS);
   assert.deepEqual(state.activationAttempts[0], {
     tabId: 1,
-    version: "1.0.0",
+    version: "1.1.0",
     at: now,
     phase: "reload-pending"
   });

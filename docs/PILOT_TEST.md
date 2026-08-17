@@ -4,7 +4,7 @@ This acceptance plan is a release gate. Unit tests prove local invariants; they 
 
 ## Prerequisites
 
-- Use the exact checksum-verified v1.0.0 Microsoft Edge Add-ons ZIP.
+- Use the exact checksum-verified v1.1.0 Microsoft Edge Add-ons ZIP.
 - Use a dedicated normal Microsoft Edge profile with a valid SAP test account. Do not use Guest or InPrivate.
 - Disable every older or duplicate installation.
 - Test only approved standard SAP-hosted IAS and SuccessFactors hostnames listed in the README. Customer-configured IAS custom domains are outside this build.
@@ -12,31 +12,35 @@ This acceptance plan is a release gate. Unit tests prove local invariants; they 
 
 ## Required Test Matrix
 
-### 1. Pre-Install Story Page
+### 1. Pre-Install Or Re-Enabled Report Center
 
-1. With the extension absent, leave one reproducibly blocked exact Story execution page active.
-2. Install and enable the exact v1.0.0 candidate.
-3. Observe that page, then open the same Story.
+1. With the extension absent, leave one Report Center page active. Test both the home route and a reproducibly blocked Story route.
+2. Install and enable the exact v1.1.0 candidate.
+3. Observe that page, then open the same Story. In a separate run, navigate from Report Center home to the Story in the same tab without switching tabs.
 
 Expected:
 
-- at most one ordinary, cache-preserving refresh occurs on that exact active Story page;
-- Report Center home, background tabs, and unrelated tabs do not refresh;
-- the refreshed page receives the current v1.0.0 marker;
+- at most one ordinary, cache-preserving refresh occurs on that exact active Report Center page;
+- background tabs and unrelated tabs do not refresh;
+- a page that was still loading at install is evaluated after completion;
+- a same-tab SAP route change is evaluated without requiring tab switching;
+- the refreshed page receives the current v1.1.0 marker;
 - returning to the page again does not trigger a second refresh; and
 - the Story attempt reaches the automatic exact-pair flow without user configuration.
 
-Repeat with the extension disabled while a Story execution page remains open, then re-enable it and return to that tab. A release update must not immediately disrupt the tab active at update time; recovery may occur only after a later eligible activation.
+Repeat with the extension disabled while Report Center remains open, then re-enable it. Confirm that a same-build service-worker start or the next eligible tab activation, URL change, or page-completion event covers the active page without requiring the user to understand extension injection timing. Separately simulate a version transition and confirm that it records the new build but skips the immediate generic startup scan so it cannot disrupt an older exact-document continuation.
 
 ### 2. End-User Popup
 
-Open the toolbar popup in ready, working, completed, and failure states.
+Open the toolbar popup in supported, unsupported, loading, working, prepared, completed, failure, and status-unavailable states.
 
 Expected:
 
-- one compact, nontechnical status card;
+- one clear, nontechnical status card that distinguishes not-yet-applied, working, page-prepared, applied, and stopped states;
 - no tenant, company, account, URL, hostname, policy, cookie, or mode input;
 - no pause, clear, resume, advanced-settings, or technical controls;
+- an animated **Checking this page…** state while the contextual check runs;
+- **Fix this report** only when the supported active page can be retried, hidden when the page is unsupported/loading/prepared/working/fixed, and shown as a safe fallback if the availability check itself cannot complete;
 - one stable **Open SAP help article** button; and
 - no technical workflow codes or claim that the Story itself rendered.
 
@@ -47,6 +51,18 @@ Expected:
 - one new tab opens at exactly `https://userapps.support.sap.com/sap/support/knowledge/en/3039244`;
 - no query, fragment, tenant, account, report, or extension-state value is added; and
 - repeated clicks create only user-requested navigation, not an automatic loop.
+
+Select **Fix this report** on a supported active Report Center page after the automatic path is complete or stopped.
+
+Expected:
+
+- an active continuation is never interrupted;
+- the attempt is recorded before exactly one normal, cache-preserving refresh;
+- the accepted or refused result is displayed before any accepted refresh begins;
+- no other tab is focused, opened, closed, or refreshed;
+- cookies and unrelated settings are not cleared;
+- the control reports a short working state and refuses a repeated attempt inside the 30-second guard; and
+- the same control is unavailable outside supported Report Center.
 
 ### 3. First Blocked Story On A Standard SAP Tenant
 
@@ -64,7 +80,7 @@ Expected:
 
 In DevTools, observe only method, sanitized host/path, status, timing, and `Sec-Fetch-Storage-Access`. Verify at most one continuation POST and no automatic loop. Do not inspect or save its body.
 
-**Report access ready** means that the extension completed its local exact-setting and continuation step. Record observed network delivery, SAP authentication, and final Story rendering separately.
+**Fix applied** means that the exact extension-owned browser setting is currently verified as effective for the active SuccessFactors site or that the extension durably recorded the local one-use continuation step for that tab. Record observed network delivery, SAP authentication, and final Story rendering separately.
 
 ### 4. Reuse And Automatic Expiry
 
@@ -115,7 +131,7 @@ Repeat on a managed test profile with the intended Microsoft Edge cookie policie
 Expected:
 
 - the extension verifies the effective exact setting after writing it;
-- a policy override, unavailable API, ineffective setting, inactive storage, or storage failure results in **Try the report again**;
+- a policy override, unavailable API, ineffective setting, inactive storage, or storage failure results in **Fix not applied**;
 - the extension does not weaken a broader privacy setting, open repeated helper tabs, or claim Story success; and
 - missing or expired SAP authentication remains an SAP sign-in outcome, not an extension success.
 
@@ -129,6 +145,7 @@ Test representative tenants across the standard SAP host families claimed in the
 - Microsoft Edge and operating-system versions;
 - sanitized SAP host-family classification only;
 - whether the exact pair was written, effective, reused, and expired;
+- whether the trusted-local current-build marker contained only the expected v1.1.0 build/version and the same-build/version-transition scans followed the documented boundary;
 - whether the durable barrier was reached and whether one continuation POST was separately observed;
 - whether the Story rendered, as a distinct downstream result;
 - popup status and sanitized browser policy/Tracking Prevention state for failures; and
@@ -140,11 +157,13 @@ Do not retain or distribute passwords, MFA codes, cookies, raw HAR files, reques
 
 - Every positive and negative case passes in current Stable Microsoft Edge using the exact packaged ZIP.
 - A first eligible blocked flow requires no tenant input or technical setup.
-- A pre-install exact Story page receives at most one safe active-tab refresh and then follows the normal automatic path.
+- A pre-install or re-enabled active Report Center page receives at most one safe automatic refresh and then follows the normal automatic path.
+- A same-tab route change and a page that completed after installation are both covered without requiring a manual tab switch.
+- The explicit manual action is restricted to the active supported Report Center page, refuses in-flight work and attempts inside the 30-second guard, displays its result before any accepted refresh, and performs at most one refresh per accepted click.
 - Only exact validated HTTPS `:443` IAS-primary/SuccessFactors-secondary pairs are created, with a hard non-renewing maximum age of 60 minutes and a maximum ledger size of twenty.
 - No cookie values or SAP form values are read.
 - Each IAS document can release at most one continuation after the durable barrier; failures never create a helper-tab or retry loop.
 - Expiry, startup, policy-conflict, and crash-recovery behavior is verified.
-- The popup remains simple, includes only the fixed SAP help action, and does not claim that SAP authentication or Story rendering succeeded.
+- The popup remains simple, includes only the bounded manual fix and fixed SAP help actions, and does not claim that SAP authentication or Story rendering succeeded.
 - The exact ZIP passes all source/package checks and matches the recorded SHA-256.
-- Listing text, permission declarations, public support/privacy URLs, and artwork match the exact v1.0.0 package.
+- Listing text, permission declarations, public support/privacy URLs, and artwork match the exact v1.1.0 package.

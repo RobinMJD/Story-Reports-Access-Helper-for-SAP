@@ -1,9 +1,9 @@
 (() => {
   "use strict";
 
-  const BUILD = "1.0.0";
+  const BUILD = "1.1.0";
   const PROTOCOL = 1;
-  const SENTINEL_KEY = "__sapStoryAccessActivation_1_0_0_p1__";
+  const SENTINEL_KEY = "__sapStoryAccessActivation_1_1_0_p1__";
 
   if (window.top !== window || globalThis[SENTINEL_KEY] === true) return;
   Object.defineProperty(globalThis, SENTINEL_KEY, {
@@ -36,7 +36,7 @@
   // A newly loaded current-build top page hands a durable pending reload
   // claim over to the normal IAS workflow. Existing pages do not acquire this
   // script until a navigation, and the background still validates the exact
-  // sender context and fixed Story route before changing state.
+  // sender context and exact Report Center path before changing state.
   try {
     const ready = chrome.runtime.sendMessage({
       type: "sf-activation-ready",
