@@ -8,7 +8,7 @@ const source = readFileSync(new URL("../src/popup.js", import.meta.url), "utf8")
 const html = readFileSync(new URL("../src/popup.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/popup.css", import.meta.url), "utf8");
 
-test("popup is a clear, accessible, nontechnical status and help surface", () => {
+test("popup remains a clear, accessible, nontechnical status and help surface", () => {
   assert.equal((html.match(/class="status-card"/g) || []).length, 1);
   assert.equal((html.match(/<button\b/g) || []).length, 2);
   assert.match(html, /role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"[^>]*aria-busy="true"/i);
@@ -24,6 +24,11 @@ test("popup is a clear, accessible, nontechnical status and help surface", () =>
   assert.doesNotMatch(html, /<(?:input|select|textarea)\b/i);
   assert.doesNotMatch(source, /chrome\.permissions/);
   assert.doesNotMatch(source, /pause-automatic-fixing|resume-automatic-fixing/);
+  assert.doesNotMatch(source, /\breopen\b/i);
+  assert.doesNotMatch(source, /setInterval\s*\(/);
+  assert.match(source, /STATUS_REQUEST_TIMEOUT_MS = 1_000/);
+  assert.match(source, /scheduleStatusPoll/);
+  assert.match(source, /generation !== renderGeneration/);
   assert.match(source, new RegExp(SAP_KB_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   assert.match(css, /body\s*\{[^}]*width:\s*392px;/s);
@@ -35,170 +40,251 @@ test("popup is a clear, accessible, nontechnical status and help surface", () =>
   assert.doesNotMatch(css, /overflow-y:\s*(?:auto|scroll)/);
 });
 
-test("popup starts in an animated checking state with the manual action hidden", () => {
-  const harness = createPopupHarness({ deferStatus: true });
+test("popup renders Checking immediately and keeps SAP help responsive while status is pending", async () => {
+  const harness = createPopupHarness({ statusSequence: ["defer"] });
   harness.open();
 
-  assert.equal(harness.element("status-title").textContent, "Checking this page…");
-  assert.equal(harness.element("status-detail").textContent, "Please wait a moment.");
+  assert.deepEqual(harness.messages, [{ type: "get-status" }]);
+  assert.equal(harness.element("status-title").textContent, "Checking this report…");
+  assert.equal(harness.element("status-detail").textContent, "This status updates automatically.");
   assert.equal(harness.element("status-dot").className, "status-dot checking");
   assert.equal(harness.element("status-card").attributes.get("aria-busy"), "true");
   assert.equal(harness.element("fix-action").hidden, true);
   assert.equal(harness.element("fix-report").disabled, true);
+
+  await harness.click("sap-help");
+  assert.deepEqual(harness.createdTabs, [{ url: SAP_KB_URL }]);
 });
 
-test("idle status says no fix has been applied and shows the manual action when applicable", async () => {
-  const harness = createPopupHarness({ workflowCode: "idle", canFixCurrentPage: true });
+test("idle status is reassuring and exposes the manual action only as a fallback", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [statusResponse("idle", true, "ready")]
+  });
   harness.open();
   await settle();
 
-  assert.deepEqual(harness.messages, [{ type: "get-status" }]);
-  assert.equal(harness.element("status-title").textContent, "No fix applied yet");
+  assert.equal(harness.element("status-title").textContent, "Extension ready");
   assert.equal(
     harness.element("status-detail").textContent,
-    "Open a Story Report. Help starts automatically if it is needed."
+    "Automatic help is active. Use the button only if the report is blank."
   );
   assert.equal(harness.element("status-dot").className, "status-dot neutral");
   assert.equal(harness.element("fix-action").hidden, false);
   assert.equal(harness.element("fix-report").disabled, false);
-  assert.equal(harness.element("fix-guidance").textContent, "Use this if the Story Report stays blank.");
-  assert.equal(harness.element("version").textContent, "v1.1.0");
+  assert.equal(harness.element("fix-guidance").textContent, "Use this only if the Story Report stays blank.");
+  assert.equal(harness.element("version").textContent, "v1.1.1");
   assert.equal(harness.element("status-card").attributes.get("aria-busy"), "false");
 });
 
-test("unsupported, loading, active, prepared, and fixed states hide the manual action", async () => {
-  const cases = [
-    ["unsupported-page", "No fix applied yet", "Open SAP Report Center to get started.", "status-dot neutral"],
-    ["page-not-ready", "SAP is still loading", "Wait for the page to finish, then reopen this window.", "status-dot active"],
-    ["page-refreshing", "Refreshing SAP…", "The page is being prepared. Please wait.", "status-dot active"],
-    ["continuation-in-progress", "Applying the fix…", "Please wait a few seconds.", "status-dot active"],
-    ["page-prepared", "SAP page prepared", "Open the Story Report again. Help will continue automatically.", "status-dot active"],
-    ["replay-scheduled", "Fix applied", "The browser fix is active. Return to your report.", "status-dot success"]
-  ];
-
-  for (const [workflowCode, title, detail, className] of cases) {
-    const harness = createPopupHarness({ workflowCode, canFixCurrentPage: false });
-    harness.open();
-    await settle();
-
-    assert.equal(harness.element("status-title").textContent, title, workflowCode);
-    assert.equal(harness.element("status-detail").textContent, detail, workflowCode);
-    assert.equal(harness.element("status-dot").className, className, workflowCode);
-    assert.equal(harness.element("fix-action").hidden, true, workflowCode);
-    assert.doesNotMatch(
-      `${title} ${detail}`,
-      /\b(?:IAS|contentSettings|cookie|origin|replay|durable|pause|resume)\b/i,
-      workflowCode
-    );
-  }
-});
-
-test("a known failed automatic result shows the manual action only when runtime allows it", async () => {
+test("page-not-ready remains dynamic and shows Fix whenever runtime says it is applicable", async () => {
   for (const canFixCurrentPage of [true, false]) {
-    const harness = createPopupHarness({ workflowCode: "automatic-fix-blocked", canFixCurrentPage });
-    harness.open();
-    await settle();
-
-    assert.equal(harness.element("status-title").textContent, "Fix not applied");
-    assert.equal(harness.element("fix-action").hidden, !canFixCurrentPage);
-    assert.equal(
-      harness.element("status-detail").textContent,
-      canFixCurrentPage
-        ? "Use Fix this report, then open the Story again."
-        : "Wait a moment, then reopen this window to try the fix."
-    );
-  }
-});
-
-test("an unavailable or malformed availability check shows the strictly validated fallback action", async () => {
-  for (const options of [
-    { workflowCode: "check-unavailable", canFixCurrentPage: false, currentPageState: "unavailable" },
-    { statusOk: false },
-    { transportThrows: true },
-    { canFixCurrentPage: "yes" }
-  ]) {
-    const harness = createPopupHarness(options);
-    harness.open();
-    await settle();
-
-    assert.equal(harness.element("status-title").textContent, "Status unavailable");
-    assert.equal(harness.element("status-detail").textContent, "If the report is blank, you can still try the fix.");
-    assert.equal(harness.element("status-dot").className, "status-dot warning");
-    assert.equal(harness.element("fix-action").hidden, false);
-    assert.equal(harness.element("fix-report").disabled, false);
-  }
-});
-
-test("manual action reports each accepted or refused runtime outcome exactly", async () => {
-  const cases = [
-    ["manual-refresh-started", "Refresh started", "Open the Story Report again when SAP is ready."],
-    ["fix-in-progress", "Fix already running", "Please wait, then return to the report."],
-    ["replay-scheduled", "Fix applied", "The browser fix is active. Return to your report."],
-    ["fix-already-applied", "Fix applied", "The browser fix is active. Return to your report."],
-    ["wrong-page", "Open SAP Report Center", "Go to the report page, then try again."],
-    ["manual-fix-cooldown", "Fix already started", "Wait a moment, then reopen this window if needed."],
-    ["manual-fix-failed", "Fix could not start", "Try the report again or open the SAP help article."]
-  ];
-
-  for (const [code, title, detail] of cases) {
     const harness = createPopupHarness({
-      workflowCode: "idle",
-      canFixCurrentPage: true,
-      actionResponse: {
-        ok: true,
-        code,
-        canFixCurrentPage: false,
-        currentPageState: code === "wrong-page" ? "unsupported" : "ready"
-      }
+      statusSequence: [statusResponse("page-not-ready", canFixCurrentPage, "loading")]
     });
     harness.open();
     await settle();
 
-    await harness.click("fix-report");
-    await settle();
-
-    assert.deepEqual(harness.messages, [
-      { type: "get-status" },
-      { type: "force-fix-current-tab" }
-    ]);
-    assert.equal(harness.element("status-title").textContent, title, code);
-    assert.equal(harness.element("status-detail").textContent, detail, code);
-    assert.equal(harness.element("fix-action").hidden, true, code);
+    assert.equal(harness.element("status-title").textContent, "Checking SAP…");
+    assert.equal(harness.element("status-detail").textContent, "This status updates automatically.");
+    assert.equal(harness.element("status-dot").className, "status-dot checking");
+    assert.equal(harness.element("status-card").attributes.get("aria-busy"), "true");
+    assert.equal(harness.element("fix-action").hidden, !canFixCurrentPage);
+    assert.equal(harness.element("fix-report").disabled, !canFixCurrentPage);
   }
 });
 
-test("an unavailable manual response restores the fallback action", async () => {
-  const harness = createPopupHarness({ workflowCode: "idle", canFixCurrentPage: true, actionStatusOk: false });
+test("one open popup follows loading, preparation, and applied states without reopening", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [
+      statusResponse("page-not-ready", false, "loading"),
+      statusResponse("page-refreshing", false, "loading"),
+      statusResponse("replay-scheduled", false, "loading")
+    ]
+  });
   harness.open();
   await settle();
+  assert.equal(harness.element("status-title").textContent, "Checking SAP…");
 
-  await harness.click("fix-report");
-  await settle();
+  await harness.advance(500);
+  assert.equal(harness.element("status-title").textContent, "Preparing this report…");
 
-  assert.equal(harness.element("status-title").textContent, "Status unavailable");
+  await harness.advance(500);
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+  assert.equal(harness.element("status-detail").textContent, "Browser access was prepared for this SAP site.");
+  assert.equal(harness.element("status-dot").className, "status-dot success");
+  assert.equal(harness.element("fix-action").hidden, true);
+  assert.deepEqual(harness.messages, [
+    { type: "get-status" },
+    { type: "get-status" },
+    { type: "get-status" }
+  ]);
+});
+
+test("repeated bounded timeouts reveal the safe fallback and a later poll recovers", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [
+      "timeout",
+      "timeout",
+      statusResponse("replay-scheduled", false, "loading")
+    ]
+  });
+  harness.open();
+
+  await harness.advance(1_000);
+  assert.equal(harness.element("status-title").textContent, "Checking this report…");
+  assert.equal(harness.messages.length, 1);
+
+  await harness.advance(250);
+  assert.equal(harness.messages.length, 2);
+  await harness.advance(1_000);
+  assert.equal(harness.element("status-title").textContent, "Couldn’t confirm status");
   assert.equal(harness.element("fix-action").hidden, false);
   assert.equal(harness.element("fix-report").disabled, false);
-  assert.equal(harness.element("fix-report").attributes.get("aria-busy"), "false");
-  assert.equal(harness.element("status-card").attributes.get("aria-busy"), "false");
+  assert.equal(harness.element("status-card").attributes.get("aria-busy"), "true");
+
+  await harness.advance(250);
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+  assert.equal(harness.element("fix-action").hidden, true);
+  assert.equal(harness.messages.length, 3);
 });
 
-test("manual action cannot run while it is hidden", async () => {
-  const harness = createPopupHarness({ workflowCode: "unsupported-page", canFixCurrentPage: false });
+test("a late status response cannot overwrite a newer manual result", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [statusResponse("idle", true, "ready"), "defer"],
+    actionResponse: statusResponse("fix-already-applied", false, "ready")
+  });
   harness.open();
   await settle();
 
+  await harness.advance(500);
+  assert.equal(harness.deferredStatusCount(), 1);
   await harness.click("fix-report");
-  assert.deepEqual(harness.messages, [{ type: "get-status" }]);
+  await settle();
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+
+  harness.resolveDeferredStatus(statusResponse("idle", true, "ready"));
+  await settle();
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+  assert.equal(harness.element("fix-action").hidden, true);
 });
 
-test("secondary action opens the exact public SAP KBA in a new tab", async () => {
-  const harness = createPopupHarness();
+test("manual action gives immediate feedback and then follows progress to completion", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [
+      statusResponse("idle", true, "ready"),
+      statusResponse("page-refreshing", false, "loading"),
+      statusResponse("replay-scheduled", false, "loading")
+    ],
+    actionResponse: "defer"
+  });
   harness.open();
   await settle();
+
+  const actionPromise = harness.click("fix-report");
+  assert.equal(harness.element("status-title").textContent, "Preparing this report…");
+  assert.equal(harness.element("status-detail").textContent, "This status updates automatically.");
+  assert.equal(harness.element("fix-report").disabled, true);
+  assert.equal(harness.element("fix-report").attributes.get("aria-busy"), "true");
 
   await harness.click("sap-help");
   assert.deepEqual(harness.createdTabs, [{ url: SAP_KB_URL }]);
-  assert.equal(harness.messages.some((message) => Object.hasOwn(message, "url")), false);
+
+  harness.resolveDeferredAction(statusResponse("manual-refresh-started", false, "ready"));
+  await actionPromise;
+  await settle();
+  assert.equal(harness.element("status-title").textContent, "Preparing this report…");
+
+  await harness.advance(250);
+  assert.equal(harness.element("status-title").textContent, "Preparing this report…");
+  await harness.advance(500);
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+  assert.deepEqual(harness.messages, [
+    { type: "get-status" },
+    { type: "force-fix-current-tab" },
+    { type: "get-status" },
+    { type: "get-status" }
+  ]);
+});
+
+test("a timed-out manual action becomes usable and still recovers from later status", async () => {
+  const harness = createPopupHarness({
+    statusSequence: [
+      statusResponse("idle", true, "ready"),
+      statusResponse("replay-scheduled", false, "loading")
+    ],
+    actionResponse: "timeout"
+  });
+  harness.open();
+  await settle();
+
+  const actionPromise = harness.click("fix-report");
+  await harness.advance(1_000);
+  await actionPromise;
+  assert.equal(harness.element("status-title").textContent, "Couldn’t confirm status");
+  assert.equal(harness.element("fix-action").hidden, false);
+  assert.equal(harness.element("fix-report").disabled, false);
+
+  await harness.advance(250);
+  assert.equal(harness.element("status-title").textContent, "Access fix applied");
+  assert.equal(harness.element("fix-action").hidden, true);
+});
+
+test("known states gate the manual action without exposing internal terminology", async () => {
+  const cases = [
+    ["unsupported-page", false, "Extension ready", false],
+    ["page-refreshing", false, "Preparing this report…", false],
+    ["continuation-in-progress", false, "Applying access fix…", false],
+    ["page-prepared", false, "Automatic help is ready", false],
+    ["replay-scheduled", false, "Access fix applied", false],
+    ["automatic-fix-blocked", true, "Access fix not applied", true],
+    ["automatic-fix-blocked", false, "Access fix not applied", false],
+    ["check-unavailable", false, "Couldn’t confirm status", true]
+  ];
+
+  for (const [code, canFixCurrentPage, title, showsFix] of cases) {
+    const harness = createPopupHarness({
+      statusSequence: [statusResponse(code, canFixCurrentPage)]
+    });
+    harness.open();
+    await settle();
+
+    assert.equal(harness.element("status-title").textContent, title, code);
+    assert.equal(harness.element("fix-action").hidden, !showsFix, code);
+    assert.doesNotMatch(
+      `${harness.element("status-title").textContent} ${harness.element("status-detail").textContent}`,
+      /\b(?:IAS|contentSettings|cookie|origin|replay|durable|pause|resume|reopen)\b/i,
+      code
+    );
+  }
+});
+
+test("manual action reports refused outcomes and hidden actions cannot execute", async () => {
+  const cases = [
+    ["wrong-page", "Open SAP Report Center"],
+    ["manual-fix-cooldown", "Access fix is already starting"],
+    ["manual-fix-failed", "Access fix could not start"],
+    ["fix-in-progress", "Access fix is already running"]
+  ];
+
+  for (const [code, title] of cases) {
+    const harness = createPopupHarness({
+      statusSequence: [statusResponse("idle", true, "ready")],
+      actionResponse: statusResponse(code, false, code === "wrong-page" ? "unsupported" : "ready")
+    });
+    harness.open();
+    await settle();
+    await harness.click("fix-report");
+    await settle();
+    assert.equal(harness.element("status-title").textContent, title, code);
+  }
+
+  const hidden = createPopupHarness({
+    statusSequence: [statusResponse("unsupported-page", false, "unsupported")]
+  });
+  hidden.open();
+  await settle();
+  await hidden.click("fix-report");
+  assert.deepEqual(hidden.messages, [{ type: "get-status" }]);
 });
 
 function createPopupHarness(options = {}) {
@@ -206,8 +292,11 @@ function createPopupHarness(options = {}) {
   const elements = new Map();
   const messages = [];
   const createdTabs = [];
+  const clock = new FakeClock();
+  const statusSequence = [...(options.statusSequence || [statusResponse("unsupported-page", false, "unsupported")])];
+  const deferredStatusCallbacks = [];
+  const deferredActionCallbacks = [];
   let domReadyListener;
-  let deferredStatusCallback;
 
   class FakeElement {
     constructor(id) {
@@ -242,27 +331,22 @@ function createPopupHarness(options = {}) {
     runtime: {
       lastError: undefined,
       getManifest() {
-        return { version: "1.1.0" };
+        return { version: "1.1.1" };
       },
       sendMessage(message, callback) {
-        if (options.transportThrows) throw new Error("worker-unavailable");
         messages.push({ ...message });
         if (message.type === "force-fix-current-tab") {
-          callback(options.actionStatusOk === false
-            ? { ok: false, code: "error" }
-            : options.actionResponse || {
-                ok: true,
-                code: "manual-refresh-started",
-                canFixCurrentPage: false,
-                currentPageState: "ready"
-              });
+          dispatchFakeResponse(
+            options.actionResponse || statusResponse("manual-refresh-started", false, "ready"),
+            callback,
+            deferredActionCallbacks
+          );
           return;
         }
-        if (options.deferStatus) {
-          deferredStatusCallback = callback;
-          return;
-        }
-        callback(makeStatusResponse(options));
+        const response = statusSequence.length
+          ? statusSequence.shift()
+          : options.defaultStatusResponse || statusResponse("replay-scheduled", false, "ready");
+        dispatchFakeResponse(response, callback, deferredStatusCallbacks);
       }
     },
     tabs: {
@@ -272,7 +356,15 @@ function createPopupHarness(options = {}) {
     }
   };
 
-  vm.runInNewContext(source, { chrome, document, Promise, Object, Set });
+  vm.runInNewContext(source, {
+    chrome,
+    document,
+    Promise,
+    Object,
+    Set,
+    setTimeout: clock.setTimeout.bind(clock),
+    clearTimeout: clock.clearTimeout.bind(clock)
+  });
 
   return {
     messages,
@@ -281,15 +373,29 @@ function createPopupHarness(options = {}) {
       assert.equal(typeof domReadyListener, "function");
       domReadyListener();
     },
-    resolveStatus() {
-      assert.equal(typeof deferredStatusCallback, "function");
-      deferredStatusCallback(makeStatusResponse(options));
+    async advance(milliseconds) {
+      await clock.advance(milliseconds);
+    },
+    deferredStatusCount() {
+      return deferredStatusCallbacks.length;
+    },
+    resolveDeferredStatus(response) {
+      const callback = deferredStatusCallbacks.shift();
+      assert.equal(typeof callback, "function");
+      callback(response);
+    },
+    resolveDeferredAction(response) {
+      const callback = deferredActionCallbacks.shift();
+      assert.equal(typeof callback, "function");
+      callback(response);
     },
     async click(id) {
       const element = document.getElementById(id);
-      if (element.disabled || element.hidden || document.getElementById("fix-action").hidden && id === "fix-report") {
-        return;
-      }
+      if (
+        element.disabled ||
+        element.hidden ||
+        (id === "fix-report" && document.getElementById("fix-action").hidden)
+      ) return;
       const listener = listeners.get(`${id}:click`);
       assert.equal(typeof listener, "function");
       return await listener({ isTrusted: true });
@@ -300,18 +406,65 @@ function createPopupHarness(options = {}) {
   };
 }
 
-function makeStatusResponse(options) {
-  return options.statusOk === false
-    ? { ok: false, code: "error" }
-    : {
-        ok: true,
-        code: options.workflowCode || "unsupported-page",
-        canFixCurrentPage: options.canFixCurrentPage === undefined
-          ? false
-          : options.canFixCurrentPage,
-        currentPageState: options.currentPageState || "unsupported",
-        version: "1.1.0"
-      };
+function dispatchFakeResponse(response, callback, deferredCallbacks) {
+  if (response === "timeout") return;
+  if (response === "defer") {
+    deferredCallbacks.push(callback);
+    return;
+  }
+  callback(response);
+}
+
+function statusResponse(code, canFixCurrentPage, currentPageState = "ready") {
+  return {
+    ok: true,
+    code,
+    canFixCurrentPage,
+    currentPageState,
+    version: "1.1.1"
+  };
+}
+
+class FakeClock {
+  constructor() {
+    this.now = 0;
+    this.nextId = 1;
+    this.tasks = new Map();
+  }
+
+  setTimeout(callback, delay = 0) {
+    const id = this.nextId;
+    this.nextId += 1;
+    this.tasks.set(id, {
+      callback,
+      dueAt: this.now + Math.max(0, Number(delay) || 0),
+      id
+    });
+    return id;
+  }
+
+  clearTimeout(id) {
+    this.tasks.delete(id);
+  }
+
+  async advance(milliseconds) {
+    const target = this.now + milliseconds;
+    let iterations = 0;
+    while (true) {
+      const next = [...this.tasks.values()]
+        .filter((task) => task.dueAt <= target)
+        .sort((left, right) => left.dueAt - right.dueAt || left.id - right.id)[0];
+      if (!next) break;
+      if (iterations > 1_000) throw new Error("fake timer runaway");
+      iterations += 1;
+      this.now = next.dueAt;
+      this.tasks.delete(next.id);
+      next.callback();
+      await settle();
+    }
+    this.now = target;
+    await settle();
+  }
 }
 
 async function settle() {

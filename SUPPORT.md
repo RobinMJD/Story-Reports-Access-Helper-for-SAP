@@ -4,19 +4,20 @@ Story Reports Access Helper for SAP is designed to work without configuration. I
 
 ## If A Story Report Is Still Blank
 
-1. Keep the supported SAP Report Center tab active, then open the extension popup. It briefly checks that page.
+1. Keep the supported SAP Report Center tab active, then open the extension popup. **Checking this report…** appears immediately and updates automatically while the popup stays open.
 2. If **Fix this report** appears, select it once and read the result shown before the page refreshes.
 3. Wait for the one normal page refresh, then open the same Story again. If the action was just used, wait at least 30 seconds before trying it again.
 4. Select **Open SAP help article** to view [SAP KBA 3039244: Unable to access Story Reports due to Browser Settings](https://userapps.support.sap.com/sap/support/knowledge/en/3039244).
 5. Confirm that the SAP session is still signed in. An expired session, missing Story permission, enterprise browser policy, or SAP-side problem cannot be fixed by the extension.
 6. Ask the organization's SAP or browser administrator whether Microsoft Edge policy or Strict Tracking Prevention overrides the required site setting.
 
-The popup status is intentionally precise:
+The popup updates itself; closing and reopening it is not part of the troubleshooting process. Its status is intentionally precise:
 
-- **No fix applied yet** means the active page has not completed a compatible browser fix. The manual action appears only when the page can be retried, or as a safe fallback when the availability check could not complete.
-- **Refreshing SAP**, **SAP page prepared**, or **Applying the fix** means the recovery is still in progress or the Story should be opened again.
-- **Fix applied** means the exact temporary browser setting is currently verified or the extension durably recorded the local one-use continuation step for this tab. It does not override SAP permissions or prove that SAP rendered the report.
-- **Fix not applied** means the extension stopped safely; use the manual action once or contact support.
+- **Checking this report** or **Checking SAP** means the live check is still updating. Edge can keep a usable SAP tab in a technical loading state, so this label alone is not a failure.
+- **Extension ready** means automatic help is active. **Fix this report** can appear when the active supported page can safely be retried, including while Edge still labels it as loading.
+- **Preparing this report**, **Automatic help is ready**, or **Applying access fix** means recovery is in progress or ready to continue if SAP requests access.
+- **Access fix applied** means the exact temporary browser setting is currently verified or the extension durably recorded the local one-use continuation step for this tab. This stronger evidence takes priority over Edge's loading label. It does not override SAP permissions or prove that SAP rendered the report.
+- **Access fix not applied** or **Couldn’t confirm status** means the extension stopped or is retrying its status check safely; use the manual action once if it appears or contact support.
 
 The SAP page linked from the popup is a public KBA preview. SAP may require an SAP for Me account for the full article.
 
@@ -33,6 +34,7 @@ Safe details to include:
 - extension version shown in the popup;
 - Microsoft Edge version and operating system;
 - exact popup status text;
+- whether the popup appeared promptly and updated while it remained open;
 - whether the Story page was open before the extension was installed or enabled;
 - whether one automatic refresh occurred; and
 - whether **Fix this report** appeared and the short result shown after selecting it; and

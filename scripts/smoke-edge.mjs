@@ -31,7 +31,7 @@ try {
   assertSmokeArchitecture(extension.root);
   fixture = await startFixtureServer();
 
-  recoveryProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-recovery-"));
+  recoveryProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v111-recovery-"));
   configureBlockedCookieProfile(recoveryProfile);
   recoveryEdge = await launchEdge(recoveryProfile);
   await runPreExistingStoryRecoveryAfterExtensionReload(recoveryEdge);
@@ -43,7 +43,7 @@ try {
   console.log("PASS: a pre-existing Report Center home page was recovered at worker start with one route-preserving reload.");
 
   fixture.reset();
-  manualProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-manual-"));
+  manualProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v111-manual-"));
   configureBlockedCookieProfile(manualProfile);
   manualEdge = await launchEdge(manualProfile);
   await runManualFixOnCurrentReportCenter(manualEdge);
@@ -55,12 +55,12 @@ try {
   console.log("PASS: Fix this report performed one bounded ordinary reload and rejected an immediate duplicate.");
 
   fixture.reset();
-  profile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-"));
+  profile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v111-"));
   configureBlockedCookieProfile(profile);
 
   edge = await launchEdge(profile);
   await runCompactPopupStates(edge);
-  console.log("PASS: the plain-language popup distinguishes not fixed, refreshing, fixing, prepared, fixed, and failed states.");
+  console.log("PASS: the plain-language popup distinguishes ready, preparing, applying, applied, and fallback states.");
 
   await runTopLevelHelperUntouched(edge);
   await runInertSources(edge);
@@ -82,7 +82,7 @@ try {
 
   assert.deepEqual(edge.runtimeErrors, [], formatRuntimeErrors(edge.runtimeErrors));
   console.log(
-    `Loaded Microsoft Edge v1.1.0 recovery and direct-flow smoke passed with ${edgeExecutable}` +
+    `Loaded Microsoft Edge v1.1.1 recovery and direct-flow smoke passed with ${edgeExecutable}` +
       (extension.fromZip ? ` using exact ZIP ${extension.archive}.` : " from the source tree.")
   );
 } finally {
@@ -99,9 +99,9 @@ try {
 async function runCompactPopupStates({ context, extensionOrigin }) {
   await assertInitialCheckingPopup(context);
 
-  const popup = await openPopup(context, extensionOrigin, "No fix applied yet");
+  const popup = await openPopup(context, extensionOrigin, "Extension ready");
   assert.equal(await containsRequiredPermission(popup), true, "contentSettings must be granted as a required permission at load");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open SAP Report Center to get started.");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open SAP Report Center to check a report.");
   assert.equal(await popup.locator("#fix-report").textContent(), "Fix this report");
   assert.equal(await popup.locator("#fix-report").isDisabled(), true);
   assert.equal(await popup.locator("#fix-action").isHidden(), true);
@@ -111,47 +111,51 @@ async function runCompactPopupStates({ context, extensionOrigin }) {
   await assertSapHelpAction(popup);
 
   await renderPopupStateForSmoke(popup, "idle", true);
-  await waitForPopupTitle(popup, "No fix applied yet");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open a Story Report. Help starts automatically if it is needed.");
+  await waitForPopupTitle(popup, "Extension ready");
+  assert.equal(
+    await popup.locator("#status-detail").textContent(),
+    "Automatic help is active. Use the button only if the report is blank."
+  );
   assert.equal(await popup.locator("#fix-report").isDisabled(), false);
   assert.equal(await popup.locator("#fix-action").isVisible(), true);
+  assert.equal(await popup.locator("#fix-guidance").textContent(), "Use this only if the Story Report stays blank.");
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "page-refreshing", false);
-  await waitForPopupTitle(popup, "Refreshing SAP…");
-  assert.equal(await popup.locator("#status-detail").textContent(), "The page is being prepared. Please wait.");
+  await waitForPopupTitle(popup, "Preparing this report…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "This status updates automatically.");
   assert.equal(await popup.locator("#fix-action").isHidden(), true);
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "manual-refresh-started", false);
-  await waitForPopupTitle(popup, "Refresh started");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again when SAP is ready.");
+  await waitForPopupTitle(popup, "Preparing this report…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "This status updates automatically.");
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "continuation-in-progress", false);
-  await waitForPopupTitle(popup, "Applying the fix…");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Please wait a few seconds.");
+  await waitForPopupTitle(popup, "Applying access fix…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "This status updates automatically.");
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "page-prepared", false);
-  await waitForPopupTitle(popup, "SAP page prepared");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again. Help will continue automatically.");
+  await waitForPopupTitle(popup, "Automatic help is ready");
+  assert.equal(await popup.locator("#status-detail").textContent(), "The extension will continue if SAP requests access.");
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "replay-scheduled", false);
-  await waitForPopupTitle(popup, "Fix applied");
-  assert.equal(await popup.locator("#status-detail").textContent(), "The browser fix is active. Return to your report.");
+  await waitForPopupTitle(popup, "Access fix applied");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Browser access was prepared for this SAP site.");
   assert.equal(await popup.locator("#fix-action").isHidden(), true);
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "automatic-fix-blocked", true);
-  await waitForPopupTitle(popup, "Fix not applied");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Use Fix this report, then open the Story again.");
+  await waitForPopupTitle(popup, "Access fix not applied");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Use Fix this report if the Story Report is blank.");
   assert.equal(await popup.locator("#fix-action").isVisible(), true);
   await assertCompactPlainPopup(popup);
 
   await renderPopupStateForSmoke(popup, "check-unavailable", false);
-  await waitForPopupTitle(popup, "Status unavailable");
+  await waitForPopupTitle(popup, "Couldn’t confirm status");
   assert.equal(await popup.locator("#status-detail").textContent(), "If the report is blank, you can still try the fix.");
   assert.equal(await popup.locator("#fix-action").isVisible(), true);
   await assertCompactPlainPopup(popup);
@@ -165,8 +169,8 @@ async function assertInitialCheckingPopup(context) {
     .replace('<link rel="stylesheet" href="popup.css">', `<style>${readFileSync(join(extension.root, "src/popup.css"), "utf8")}</style>`)
     .replace('<script src="popup.js"></script>', "");
   await popup.setContent(html);
-  assert.equal(await popup.locator("#status-title").textContent(), "Checking this page…");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Please wait a moment.");
+  assert.equal(await popup.locator("#status-title").textContent(), "Checking this report…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "This status updates automatically.");
   assert.equal(await popup.locator("#status-card").getAttribute("aria-busy"), "true");
   assert.equal(await popup.locator("#fix-action").isHidden(), true);
   const animationName = await popup.locator("#status-dot").evaluate((dot) => getComputedStyle(dot).animationName);
@@ -217,7 +221,7 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
   const sentinel = await probeActiveStorySentinel(edgeInstance.serviceWorker);
   assert.deepEqual(sentinel.response, {
     type: "sf-activation-current",
-    build: "1.1.0",
+    build: "1.1.1",
     protocol: 1
   });
   assert.ok(Number.isInteger(sentinel.tabId) && sentinel.tabId > 0);
@@ -248,17 +252,17 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
   assert.equal(fixture.helperRequests, 0, "install recovery must not open a helper tab");
   assert.equal(fixture.unexpectedIasMethods, 0);
 
-  const preparedPopup = await openPopup(context, extensionOrigin, "SAP is still loading", source);
+  const preparedPopup = await openPopup(context, extensionOrigin, "Access fix applied", source);
   const loadingStatus = await getStatus(preparedPopup);
   assert.equal(loadingStatus.ok, true);
-  assert.equal(loadingStatus.code, "page-not-ready");
+  assert.equal(loadingStatus.code, "replay-scheduled");
   const recentResults = await readRecentResults(preparedPopup);
   assert.equal(recentResults.at(-1)?.outcome, "replay-scheduled", "durable fix state must exist before the held POST is released");
   const activationAttempts = await readActivationAttempts(preparedPopup);
   assert.equal(activationAttempts.length, 1, "one terminal recovery marker must prevent any second reload");
   assert.deepEqual(Object.keys(activationAttempts[0]).sort(), ["at", "phase", "tabId", "version"]);
   assert.equal(activationAttempts[0].tabId, sentinel.tabId);
-  assert.equal(activationAttempts[0].version, "1.1.0");
+  assert.equal(activationAttempts[0].version, "1.1.1");
   assert.equal(activationAttempts[0].phase, "reload-attempted");
   assert.ok(Number.isSafeInteger(activationAttempts[0].at) && activationAttempts[0].at > 0);
   assert.doesNotMatch(JSON.stringify(activationAttempts[0]), /https?:|successfactors|accounts/i);
@@ -271,8 +275,7 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
   assert.equal(await recoveredFrame.locator("#ias-replay-result").textContent(), "IAS replay accepted");
   await source.waitForLoadState("load");
   await source.bringToFront();
-  await preparedPopup.reload();
-  await waitForPopupTitle(preparedPopup, "Fix applied");
+  await waitForPopupTitle(preparedPopup, "Access fix applied");
   const preparedStatus = await getStatus(preparedPopup);
   assert.equal(preparedStatus.ok, true);
   assert.equal(preparedStatus.code, "replay-scheduled");
@@ -310,24 +313,32 @@ async function runManualFixOnCurrentReportCenter({ context, extensionOrigin }) {
   const popup = await context.newPage();
   await popup.goto(`${extensionOrigin}/src/popup.html`);
   await source.bringToFront();
-  await popup.reload();
-  await waitForPopupTitle(popup, "No fix applied yet");
+  // The already-open popup must discover the newly active SAP page through its
+  // live poll; a reload here would conceal stale one-shot status behavior.
+  await waitForPopupTitle(popup, "Extension ready");
+  await waitUntil(async () => await popup.locator("#fix-report").isDisabled() === false);
   assert.equal(await popup.locator("#fix-report").isDisabled(), false, "the manual action must be available only on Report Center");
-  assert.equal(await popup.locator("#fix-guidance").textContent(), "Use this if the Story Report stays blank.");
+  assert.equal(await popup.locator("#fix-guidance").textContent(), "Use this only if the Story Report stays blank.");
 
   fixture.armActivationRecovery();
   const replayBarrier = fixture.holdNextReplay();
   await popup.locator("#fix-report").click();
-  await waitForPopupTitle(popup, "Refresh started");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again when SAP is ready.");
+  await waitForPopupTitle(popup, "Preparing this report…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "This status updates automatically.");
   assert.equal(fixture.sourceRequests, 1, "the accepted result must render before the delayed reload starts");
   await waitUntil(() => fixture.sourceRequests === 2 && fixture.iasInitialRequests === 2, 8_000);
   await waitForReplayBarrier(replayBarrier);
+  await waitForPopupTitle(popup, "Access fix applied");
+  assert.equal(
+    await popup.locator("#status-detail").textContent(),
+    "Browser access was prepared for this SAP site.",
+    "the already-open popup must replace its transient status without a popup reload"
+  );
 
   await source.bringToFront();
   const whileLoading = await sendPopupMessage(popup, { type: "force-fix-current-tab" });
   assert.equal(whileLoading?.ok, true);
-  assert.equal(whileLoading?.code, "page-not-ready");
+  assert.equal(whileLoading?.code, "fix-already-applied");
   await assertQuiescent(fixture);
   assert.equal(fixture.sourceRequests, 2, "an immediate repeated manual request must not reload again");
   assert.equal(fixture.iasReplayRequests, 1, "an immediate repeated manual request must not duplicate the IAS POST");
@@ -338,8 +349,7 @@ async function runManualFixOnCurrentReportCenter({ context, extensionOrigin }) {
   await recoveredFrame.locator("#ias-replay-result").waitFor({ state: "attached", timeout: 5_000 });
   await source.waitForLoadState("load");
   await source.bringToFront();
-  await popup.reload();
-  await waitForPopupTitle(popup, "Fix applied");
+  await waitForPopupTitle(popup, "Access fix applied");
   const duplicate = await sendPopupMessage(popup, { type: "force-fix-current-tab" });
   assert.equal(duplicate?.ok, true);
   assert.equal(duplicate?.code, "fix-already-applied");
@@ -355,7 +365,7 @@ async function probeActiveStorySentinel(serviceWorker) {
     try {
       const response = await chrome.tabs.sendMessage(
         tab.id,
-        { type: "sf-activation-probe", build: "1.1.0", protocol: 1 },
+        { type: "sf-activation-probe", build: "1.1.1", protocol: 1 },
         { frameId: 0 }
       );
       return { tabId: tab.id, url: tab.url || null, response: response || null };
@@ -471,10 +481,10 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
   assert.equal(source.frames().includes(iasFrame), true, "the exact original IAS frame must own the held POST");
   assert.equal(iasFrame.url(), fixture.frameUrl);
 
-  const popup = await openPopup(context, extensionOrigin, "SAP is still loading", source);
+  const popup = await openPopup(context, extensionOrigin, "Access fix applied", source);
   const loadingStatus = await getStatus(popup);
   assert.equal(loadingStatus.ok, true);
-  assert.equal(loadingStatus.code, "page-not-ready");
+  assert.equal(loadingStatus.code, "replay-scheduled");
   assert.equal(loadingStatus.activeCount, 0);
   const recentResults = await readRecentResults(popup);
   assert.equal(recentResults.at(-1)?.outcome, "replay-scheduled", "durable status must exist before the held POST is released");
@@ -487,12 +497,11 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
   assert.equal(await iasFrame.locator("#ias-replay-result").textContent(), "IAS replay accepted");
   await source.waitForLoadState("load");
   await source.bringToFront();
-  await popup.reload();
-  await waitForPopupTitle(popup, "Fix applied");
+  await waitForPopupTitle(popup, "Access fix applied");
   const status = await getStatus(popup);
   assert.equal(status.ok, true);
   assert.equal(status.code, "replay-scheduled");
-  assert.equal(await popup.locator("#status-detail").textContent(), "The browser fix is active. Return to your report.");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Browser access was prepared for this SAP site.");
   assert.equal(source.frames().includes(iasFrame), true, "the same nested frame must receive the POST response");
   await assertQuiescent(fixture);
 
@@ -508,7 +517,7 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
 }
 
 async function assertAutomaticStateAfterRestart({ context, extensionOrigin }) {
-  const popup = await openPopup(context, extensionOrigin, "No fix applied yet");
+  const popup = await openPopup(context, extensionOrigin, "Extension ready");
   const status = await getStatus(popup);
   assert.equal(status.ok, true);
   assert.equal(status.code, "unsupported-page");
@@ -559,7 +568,7 @@ async function launchEdge(userDataDir) {
   const serviceWorker = context.serviceWorkers().find((worker) => worker.url().startsWith("chrome-extension://"));
   const serviceWorkerUrl = new URL(serviceWorker.url());
   const extensionOrigin = `${serviceWorkerUrl.protocol}//${serviceWorkerUrl.host}`;
-  assert.equal(await serviceWorker.evaluate(() => chrome.runtime.getManifest().version), "1.1.0");
+  assert.equal(await serviceWorker.evaluate(() => chrome.runtime.getManifest().version), "1.1.1");
   return { context, extensionOrigin, runtimeErrors, serviceWorker };
 }
 
@@ -578,7 +587,6 @@ async function openPopup(context, extensionOrigin, expectedTitle, activePage = n
   await popup.goto(`${extensionOrigin}/src/popup.html`);
   if (activePage) {
     await activePage.bringToFront();
-    await popup.reload();
   }
   await waitForPopupTitle(popup, expectedTitle);
   return popup;
@@ -620,6 +628,7 @@ async function assertCompactPlainPopup(popup) {
 async function renderPopupStateForSmoke(popup, code, canFixCurrentPage) {
   await popup.evaluate(
     ({ statusCode, canFix }) => {
+      cancelScheduledStatusPoll();
       renderStatus(statusCode, canFix);
       setFixVisibility(shouldShowFix({ code: statusCode, canFixCurrentPage: canFix }));
     },
@@ -748,7 +757,7 @@ async function waitPastDormantDetectionWindow() {
 }
 
 async function startFixtureServer() {
-  const certificateDirectory = mkdtempSync(join(tmpdir(), "sap-story-helper-cert-v101-"));
+  const certificateDirectory = mkdtempSync(join(tmpdir(), "sap-story-helper-cert-v111-"));
   const keyPath = join(certificateDirectory, "fixture-key.pem");
   const certificatePath = join(certificateDirectory, "fixture-cert.pem");
   const openssl = spawnSync(
@@ -1052,7 +1061,7 @@ function assertSmokeArchitecture(extensionRoot) {
   const popupHtml = readFileSync(join(extensionRoot, "src/popup.html"), "utf8");
   const popupCss = readFileSync(join(extensionRoot, "src/popup.css"), "utf8");
 
-  assert.equal(manifest.version, "1.1.0");
+  assert.equal(manifest.version, "1.1.1");
   assert.deepEqual(manifest.permissions, ["storage", "alarms", "contentSettings"]);
   assert.equal(manifest.optional_permissions, undefined);
   assert.equal(manifest.optional_host_permissions, undefined);
@@ -1086,14 +1095,47 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.match(background, /startupActivationScanDecisionPromise/, "worker startup must retain its safe scan decision");
   assert.match(background, /shouldScan \? evaluateActiveReportCenterTabs\(\) : undefined/, "same-build worker startup must inspect the active page");
   assert.match(background, /isSupportedReportCenterUrl\(tab\.url\)/, "recovery must remain on the exact Report Center path");
+  assert.match(
+    background,
+    /function isSafeReportCenterTab[\s\S]{0,320}\["loading", "complete"\]\.includes\(tab\.status\)/,
+    "safe Report Center recovery must not wait for a fragile complete-only snapshot"
+  );
+  assert.match(
+    background,
+    /message\?\.type === "get-status"[\s\S]{0,240}\? Promise\.resolve\(\)\.then\(\(\) => dispatchMessage\(message, sender\)\)/,
+    "popup status must bypass startup recovery"
+  );
+  assert.match(background, /const POPUP_STATUS_TIMEOUT_MS = 750/, "background popup status must be deadline-bounded");
+  assert.match(
+    background,
+    /Promise\.race\(\[[\s\S]{0,200}getSingleFlightPublicStatusSnapshot\(\)[\s\S]{0,240}makeUnavailablePublicStatus\(\)/,
+    "slow browser status APIs must not block the popup"
+  );
+  assert.match(background, /let publicStatusSnapshotPromise = null/, "popup polls must share active status work");
+  assert.match(background, /const POPUP_STATUS_SNAPSHOT_STALE_MS = 2_000/, "a stalled status snapshot must become replaceable");
+  assert.match(background, /const MAX_PUBLIC_STATUS_SNAPSHOTS = 2/, "stalled status calls must remain capped");
+  assert.match(background, /const DIRECT_RESUME_TIMEOUT_MS = 5_000/, "stale IAS resume channels must not stall startup forever");
+  assert.match(background, /documentId: workflow\.sourceDocumentId/, "automatic continuation must stay bound to the exact IAS document");
+  const contextualStatusStart = background.indexOf("function contextualStatusCode");
+  const contextualStatusEnd = background.indexOf("function canForceFixCurrentPage", contextualStatusStart);
+  const contextualStatusSource = background.slice(contextualStatusStart, contextualStatusEnd);
+  assert.ok(
+    contextualStatusSource.indexOf('recent?.outcome === "replay-scheduled"') >= 0 &&
+      contextualStatusSource.indexOf("allowance.active") >
+        contextualStatusSource.indexOf('recent?.outcome === "replay-scheduled"') &&
+      contextualStatusSource.indexOf('context.pageState === "loading"') >
+        contextualStatusSource.indexOf("allowance.active"),
+    "verified replay and allowance evidence must outrank transient tab loading"
+  );
   assert.match(background, /message\.type === "force-fix-current-tab" && hasExactKeys\(message, \["type"\]\)/);
   assert.match(background, /message\.type === "force-fix-current-tab"[\s\S]{0,240}isTrustedPopupSender\(sender\)/);
   assert.match(background, /const MANUAL_FIX_COOLDOWN_MS = 30_000/);
   assert.match(background, /const MANUAL_RELOAD_DELAY_MS = 1_200/);
   assert.match(background, /canFixCurrentPage/);
   assert.match(background, /currentPageState/);
-  assert.match(background, /scheduleClaimedReportCenterReload\(currentTab\.id, currentTab\.windowId\)/);
+  assert.match(background, /scheduleClaimedReportCenterReload\(currentTab\.id, currentTab\.windowId, currentTab\.url\)/);
   assert.match(background, /async function performClaimedReportCenterReload/);
+  assert.match(background, /tab\.url !== expectedUrl/);
   assert.match(background, /assessActiveAllowanceForTab/);
   assert.match(background, /effective\?\.setting === "allow"/);
   assert.doesNotMatch(background, /\bchrome\s*\.\s*tabs\s*\.\s*create\s*\(/, "recovery must not create helper or replacement tabs");
@@ -1108,16 +1150,18 @@ function assertSmokeArchitecture(extensionRoot) {
   );
   assert.ok(
     background.indexOf("state.activationAttempts = [...remainingAttempts, attempt]") <
-      background.indexOf("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId)"),
+      background.indexOf("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId, currentTab.url)"),
     "the manual recovery tombstone must be persisted before its delayed reload is scheduled"
   );
   assert.match(content, /if \(window\.top === window\) return;/, "top-level SAP helper pages must remain untouched");
+  assert.match(content, /new MutationObserver\(scheduleInterstitialChecks\)/, "slow IAS insertion must remain observable");
+  assert.doesNotMatch(content, /OBSERVER_TIMEOUT_MS|10_000/, "IAS detection must not retain a 10-second cutoff");
   assert.match(content, /resume-with-cookie-exception/);
   assert.match(content, /HTMLFormElement\s*\.\s*prototype\s*\.\s*submit\s*\.\s*call\s*\(/);
   assert.match(content, /replayGate\.then\(\(\) => submitReplayPlan\(result\)\)/);
   assert.doesNotMatch(content, /\bnew\s+FormData\s*\(/, "extension must not serialize POST fields");
   assert.doesNotMatch(content, /\bcontrol\s*\.\s*value\b/, "extension must not read POST field values");
-  assert.match(activation, /const BUILD = "1\.1\.0";/);
+  assert.match(activation, /const BUILD = "1\.1\.1";/);
   assert.match(activation, /const PROTOCOL = 1;/);
   assert.match(activation, /message\.type !== "sf-activation-probe"/);
   assert.match(activation, /type: "sf-activation-current"/);
@@ -1126,10 +1170,18 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.doesNotMatch(popup, /chrome\.permissions\.(?:request|remove)/, "required permission must have no popup permission gate");
   assert.doesNotMatch(popup, /(?:open-fresh-report-center|helper-ready|recoveryOfferId)/);
   assert.doesNotMatch(popup, /(?:pause-automatic-fixing|resume-automatic-fixing)/);
-  assert.match(popupHtml, /id="status-title">Checking this page…/);
+  assert.match(popupHtml, /id="status-title">Checking this report…/);
   assert.match(popupHtml, /id="fix-action" hidden/);
   assert.match(popupCss, /\.status-dot\.checking\s*\{[^}]*animation:/s);
   assert.match(popupCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none/s);
+  assert.match(popup, /const STATUS_REQUEST_TIMEOUT_MS = 1_000/);
+  assert.match(popup, /const STATUS_POLL_INTERVAL_MS = 500/);
+  assert.match(popup, /const STATUS_RETRY_INTERVAL_MS = 250/);
+  assert.match(popup, /async function pollPopupStatus/);
+  assert.match(popup, /statusPollInFlight/);
+  assert.match(popup, /renderGeneration/);
+  assert.doesNotMatch(popup, /setInterval\s*\(/, "popup refresh must use one bounded request at a time");
+  assert.doesNotMatch(popup, /reopen this window/i, "popup status must update without asking the user to reopen it");
   assert.match(popup, /sendRuntimeMessage\(\{ type: "force-fix-current-tab" \}\)/);
   assert.match(popup, /const SAP_KB_URL = "https:\/\/userapps\.support\.sap\.com\/sap\/support\/knowledge\/en\/3039244";/);
   assert.match(popup, /chrome\.tabs\.create\(\{ url: SAP_KB_URL \}\)/);
@@ -1140,8 +1192,8 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.match(popupHtml, /id="sap-help"/);
   assert.match(popupHtml, /Open SAP help article/);
   assert.match(popup, /sendRuntimeMessage\(\{ type: "force-fix-current-tab" \}\)/);
-  assert.match(popup, /fixed: \["Fix applied"/);
-  assert.match(popup, /idle: \["No fix applied yet"/);
+  assert.match(popup, /fixed: \["Access fix applied"/);
+  assert.match(popup, /idle: \["Extension ready"/);
   assert.match(popup, /if \(code === "replay-scheduled" \|\| code === "fix-already-applied"\) return "fixed"/);
   assert.doesNotMatch(popupHtml, /\b(?:IAS|contentSettings|cookie|origin|replay|durable)\b/i);
   assert.doesNotMatch(popupHtml, /\b(?:pause|resume)\b/i);
@@ -1152,7 +1204,7 @@ function prepareExtensionRoot() {
   if (!zip) return { root: projectRoot, archive: null, fromZip: false, cleanup: () => undefined };
   const archive = resolve(zip);
   if (!existsSync(archive)) throw new Error(`Store ZIP not found: ${archive}`);
-  const extracted = mkdtempSync(join(tmpdir(), "sap-story-helper-package-v101-"));
+  const extracted = mkdtempSync(join(tmpdir(), "sap-story-helper-package-v111-"));
   const attempts = archiveExtractionAttempts(archive, extracted);
   let lastError = "no compatible archive extractor was found";
   for (const attempt of attempts) {

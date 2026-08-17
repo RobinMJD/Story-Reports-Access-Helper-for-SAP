@@ -2,8 +2,8 @@
   "specification": {
     "authority": "Microsoft Edge Developer documentation",
     "url": "https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension",
-    "checkedOn": "2026-08-16",
-    "productVersion": "1.1.0",
+    "checkedOn": "2026-08-17",
+    "productVersion": "1.1.1",
     "assetSpecs": {
       "icon": {
         "width": 300,
@@ -51,7 +51,7 @@
       "fileName": "small-promo-440x280.png",
       "width": 440,
       "height": 280,
-      "sha256": "09d0763d1de89b058c5f09cf4b2850fb26d934e408ca0a52056dace221e9d0ea",
+      "sha256": "e524891dd51634ac0b14a71189c44ea0407864aeda1490c9483a28a1b8236eaa",
       "overflowFree": true,
       "safeBounds": true,
       "checkedSafeElements": 3
@@ -60,7 +60,7 @@
       "fileName": "large-promo-1400x560.png",
       "width": 1400,
       "height": 560,
-      "sha256": "eaf96c3f5fd219573f58d7d335a0f1438d639058b71d8b9ccf72f13110c63cd1",
+      "sha256": "513216eb788d151438b82e2f2ea614f3c7560f5481ba6471243624e5c4d69bb3",
       "overflowFree": true,
       "safeBounds": true,
       "checkedSafeElements": 5
@@ -69,7 +69,7 @@
       "fileName": "screenshot-01-automatic-fix-1280x800.png",
       "width": 1280,
       "height": 800,
-      "sha256": "2caec8e82832bed1e5c5122b00f2d5bef1d2a57464714d2735c3f3a2bc4f8aed",
+      "sha256": "04ac8b06543b5760186bf766248939edec853008acce5b89fd4789be959e7f13",
       "overflowFree": true,
       "safeBounds": true,
       "checkedSafeElements": 7
@@ -78,7 +78,7 @@
       "fileName": "screenshot-02-simple-status-1280x800.png",
       "width": 1280,
       "height": 800,
-      "sha256": "ffda693fc61cc807aa179107dad64f8186b3cadd07ffd38d8034148a65c10541",
+      "sha256": "bad21b67f397cd0abdafe13f1a21df6be5e48fa0024f2a2a22268d86addf38bc",
       "overflowFree": true,
       "safeBounds": true,
       "checkedSafeElements": 7
@@ -87,7 +87,7 @@
       "fileName": "screenshot-03-built-in-help-1280x800.png",
       "width": 1280,
       "height": 800,
-      "sha256": "c55f4fb57c3d35020446a328ebc26ccd0c94b1182cba9e4bcaba8d287a6fa236",
+      "sha256": "2900d56d219d238306476b1e59f07e3abd67787d97f704fbe1be036a6f1a1240",
       "overflowFree": true,
       "safeBounds": true,
       "checkedSafeElements": 7

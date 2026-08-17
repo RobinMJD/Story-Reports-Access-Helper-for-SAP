@@ -105,32 +105,32 @@ test("Report Center recovery accepts only the exact document path and its SAP ha
 
 test("activation attempt tombstones are exact, deduplicated, future-rejecting, and bounded without eviction", () => {
   const now = 1_900_000_000_000;
-  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now), {
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.1", now), {
     tabId: 10,
-    version: "1.1.0",
+    version: "1.1.1",
     at: now,
     phase: "reload-pending"
   });
-  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now, "reload-attempted"), {
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.1", now, "reload-attempted"), {
     tabId: 10,
-    version: "1.1.0",
+    version: "1.1.1",
     at: now,
     phase: "reload-attempted"
   });
-  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.0", now, "reload-scheduled"), {
+  assert.deepEqual(makeActivationRecoveryAttempt(10, "1.1.1", now, "reload-scheduled"), {
     tabId: 10,
-    version: "1.1.0",
+    version: "1.1.1",
     at: now,
     phase: "reload-scheduled"
   });
-  assert.equal(makeActivationRecoveryAttempt(0, "1.1.0", now), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0-beta", now), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0", 0), null);
-  assert.equal(makeActivationRecoveryAttempt(10, "1.1.0", now, "unknown"), null);
+  assert.equal(makeActivationRecoveryAttempt(0, "1.1.1", now), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.1-beta", now), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.1", 0), null);
+  assert.equal(makeActivationRecoveryAttempt(10, "1.1.1", now, "unknown"), null);
 
   const attempts = Array.from({ length: MAX_ACTIVATION_RECOVERY_ATTEMPTS + 2 }, (_, index) => ({
     tabId: index + 1,
-    version: "1.1.0",
+    version: "1.1.1",
     at: now - index,
     url: "https://must-not-survive.example",
     title: "must not survive",
@@ -141,10 +141,10 @@ test("activation attempt tombstones are exact, deduplicated, future-rejecting, a
     activationAttempts: [
       attempts[0],
       { ...attempts[0], at: now + 500 },
-      { tabId: -1, version: "1.1.0", at: now },
+      { tabId: -1, version: "1.1.1", at: now },
       { tabId: 500, version: "unsafe", at: now },
-      { tabId: 501, version: "1.1.0", at: 0 },
-      { tabId: 502, version: "1.1.0", at: now + 1 },
+      { tabId: 501, version: "1.1.1", at: 0 },
+      { tabId: 502, version: "1.1.1", at: now + 1 },
       ...attempts.slice(1)
     ]
   }, now);
@@ -152,7 +152,7 @@ test("activation attempt tombstones are exact, deduplicated, future-rejecting, a
   assert.equal(state.activationAttempts.length, MAX_ACTIVATION_RECOVERY_ATTEMPTS);
   assert.deepEqual(state.activationAttempts[0], {
     tabId: 1,
-    version: "1.1.0",
+    version: "1.1.1",
     at: now,
     phase: "reload-pending"
   });

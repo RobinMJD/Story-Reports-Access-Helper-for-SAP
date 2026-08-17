@@ -32,7 +32,7 @@ test("publisher diagnostics redact Microsoft Edge API credentials", () => {
   assert.doesNotMatch(sanitizeEdgeMessage("Authorization: ApiKey super-secret"), /super-secret/);
 });
 
-test("Edge certification notes disclose v1.1.0 recovery and manual-fix boundaries", () => {
+test("Edge certification notes disclose v1.1.1 recovery and manual-fix boundaries", () => {
   const notes = readEdgeConfig({
     EDGE_ADDONS_CLIENT_ID: "client",
     EDGE_ADDONS_API_KEY: "key",
@@ -47,11 +47,17 @@ test("Edge certification notes disclose v1.1.0 recovery and manual-fix boundarie
     "tab activation",
     "URL-change or page-completion events",
     "trusted-local marker stores only the current extension build/version",
+    "five-second fail-closed deadline",
+    "Checking this report",
+    "non-overlapping status checks",
+    "advisory tab-loading value",
     "Fix this report",
     "result is returned for display",
     "30-second repeat guard",
     "never clears browser cookies",
-    "Fix applied means either",
+    "document's lifetime",
+    "arbitrary ten-second cutoff",
+    "Access fix applied means either",
     "https://userapps.support.sap.com/sap/support/knowledge/en/3039244"
   ]) {
     assert.match(notes, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

@@ -34,6 +34,7 @@ const STORY_QUERY_PATTERNS = [
 const LEGACY_RELIABLE_CONTROL_KEY = "sapIasReliableModeControl.v1";
 const SF_ACTIVATION_BUILD_KEY = "sapStoryAccessActivationBuild.v1";
 const ATTEMPT_ID = "123e4567-e89b-42d3-a456-426614174000";
+const DIRECT_RESUME_TIMEOUT_MS = 5_000;
 
 test("cold-worker messages wait for startup reconciliation before any workflow claim", async () => {
   const harness = await createHarness({ holdInitialReconcile: true, coldDetection: true });
@@ -41,6 +42,98 @@ test("cold-worker messages wait for startup reconciliation before any workflow c
   assert.equal(harness.coldResult.code, "replay-scheduled");
   assert.equal(harness.resumes.length, 1);
   assert.equal(harness.state().recent[0].outcome, "replay-scheduled");
+});
+
+test("trusted popup status bypasses a held startup reconciliation", async () => {
+  const harness = await createHarness({ holdInitialReconcile: true, coldStatus: true });
+  assert.equal(harness.coldStatusResolvedBeforeRelease, true);
+  assert.deepEqual(harness.coldStatus, {
+    ok: true,
+    code: "unsupported-page",
+    activeCount: 0,
+    version: "1.1.1",
+    canFixCurrentPage: false,
+    currentPageState: "unsupported"
+  });
+  assert.equal(harness.coldEvents.includes("initial-reconcile-released"), false);
+});
+
+test("trusted popup status has a hard deadline while allowance storage is held", async () => {
+  const harness = await createHarness({
+    holdInitialReconcile: true,
+    coldStatus: true,
+    initialTab: makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` })
+  });
+  assert.equal(harness.coldStatusResolvedBeforeRelease, true);
+  assert.equal(harness.coldStatus.code, "check-unavailable");
+  assert.equal(harness.coldStatus.currentPageState, "unavailable");
+  assert.ok(harness.coldStatusElapsedMs >= 700, harness.coldStatusElapsedMs);
+  assert.ok(harness.coldStatusElapsedMs < 1_000, harness.coldStatusElapsedMs);
+});
+
+test("concurrent popup checks share work, replace one stalled snapshot, and cap browser calls", async (t) => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.local[RELIABLE_LEDGER_KEY] = {
+    version: 1,
+    entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
+  };
+  const releases = [];
+  harness.setCookieGetHook(() => new Promise((resolve) => releases.push(resolve)));
+  harness.resetTrace();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const first = harness.popup("get-status");
+  const second = harness.popup("get-status");
+  await untilMicrotask(() => harness.cookieGets.length === 1);
+  t.mock.timers.tick(750);
+
+  assert.equal((await first).code, "check-unavailable");
+  assert.equal((await second).code, "check-unavailable");
+  assert.equal(harness.cookieGets.length, 1);
+
+  // Once the shared browser snapshot is stale, a later poll gets one fresh
+  // chance instead of remaining pinned to the first hung API call forever.
+  t.mock.timers.tick(1_250);
+  harness.setCookieGetHook(null);
+  const recovered = harness.popup("get-status");
+  await untilMicrotask(() => harness.cookieGets.length === 2);
+  assert.equal((await recovered).code, "replay-scheduled");
+
+  releases[0]();
+  await flushMicrotasks();
+  assert.equal((await harness.popup("get-status")).code, "replay-scheduled");
+  assert.equal(harness.cookieGets.length, 3);
+});
+
+test("two permanently stalled popup snapshots cannot accumulate more browser calls", async (t) => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.local[RELIABLE_LEDGER_KEY] = {
+    version: 1,
+    entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
+  };
+  harness.setCookieGetHook(() => new Promise(() => undefined));
+  harness.resetTrace();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const first = harness.popup("get-status");
+  await untilMicrotask(() => harness.cookieGets.length === 1);
+  t.mock.timers.tick(750);
+  assert.equal((await first).code, "check-unavailable");
+
+  t.mock.timers.tick(1_250);
+  const replacement = harness.popup("get-status");
+  await untilMicrotask(() => harness.cookieGets.length === 2);
+  t.mock.timers.tick(750);
+  assert.equal((await replacement).code, "check-unavailable");
+
+  t.mock.timers.tick(2_000);
+  const capped = harness.popup("get-status");
+  await flushMicrotasks();
+  t.mock.timers.tick(750);
+  assert.equal((await capped).code, "check-unavailable");
+  assert.equal(harness.cookieGets.length, 2);
 });
 
 test("automatic mode writes, verifies, commits, and resumes one exact document in order", async () => {
@@ -216,6 +309,87 @@ test("an ambiguous exact-document transport is tombstoned and never retried", as
   assert.equal(harness.resumes.length, 1);
 });
 
+test("startup recovery bounds a never-resolving exact-document resume and never retries it", async (t) => {
+  const harness = await createHarness();
+  const state = createEmptyState();
+  state.workflows.push(makeDirectWorkflow());
+  harness.setState(state);
+  harness.setResumeHook(() => new Promise(() => undefined));
+  harness.resetTrace();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  await harness.startWorker();
+  await untilMicrotask(() => harness.resumes.length === 1);
+  const resumeAttemptId = harness.resumes[0].message.resumeAttemptId;
+  t.mock.timers.tick(DIRECT_RESUME_TIMEOUT_MS);
+  await untilMicrotask(() => harness.state().recent.length === 1);
+
+  assert.equal(harness.state().workflows.length, 0);
+  assert.equal(harness.state().recent.length, 1);
+  assert.equal(harness.state().recent[0].outcome, "resume-interrupted");
+  assert.equal(harness.state().recent[0].resumeAttemptId, resumeAttemptId);
+
+  assert.equal((await harness.detect({ documentId: "source-doc-2", frameId: 8 })).code,
+    "resume-interrupted");
+  assert.equal(harness.resumes.length, 1);
+  assert.equal(harness.replayCommitAcks, 0);
+});
+
+test("timeout preserves a durable replay commit even when the outer response stays pending", async (t) => {
+  const harness = await createHarness();
+  let releaseOuterResponse;
+  harness.setAfterReplayCommitHook(() => new Promise((resolve) => {
+    releaseOuterResponse = resolve;
+  }));
+  harness.resetTrace();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const pending = harness.detect();
+  await untilMicrotask(() => harness.events.includes("replay-commit-acknowledged"));
+  t.mock.timers.tick(DIRECT_RESUME_TIMEOUT_MS);
+
+  assert.equal((await pending).code, "replay-scheduled");
+  assert.equal(harness.state().workflows.length, 0);
+  assert.equal(harness.state().recent.length, 1);
+  assert.equal(harness.state().recent[0].outcome, "replay-scheduled");
+
+  releaseOuterResponse();
+  await flushMicrotasks();
+  assert.equal(harness.state().recent.length, 1);
+  assert.equal(harness.state().recent[0].outcome, "replay-scheduled");
+  assert.equal(harness.replayCommitAcks, 1);
+  assert.equal(harness.resumes.length, 1);
+});
+
+test("a commit and response arriving after timeout cannot revive or downgrade the tombstone", async (t) => {
+  const harness = await createHarness();
+  let releaseResume;
+  harness.setResumeHook(() => new Promise((resolve) => {
+    releaseResume = resolve;
+  }));
+  harness.resetTrace();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const pending = harness.detect();
+  await untilMicrotask(() => harness.resumes.length === 1);
+  const resumeAttemptId = harness.resumes[0].message.resumeAttemptId;
+  t.mock.timers.tick(DIRECT_RESUME_TIMEOUT_MS);
+
+  assert.equal((await pending).code, "resume-interrupted");
+  assert.deepEqual(await harness.commit(resumeAttemptId), { ok: true, code: "ignored" });
+  releaseResume();
+  await flushMicrotasks();
+
+  assert.equal(harness.state().workflows.length, 0);
+  assert.equal(harness.state().recent.length, 1);
+  assert.equal(harness.state().recent[0].outcome, "resume-interrupted");
+  assert.equal(harness.replayCommitAcks, 0);
+  assert.equal(harness.resumes.length, 1);
+  assert.equal((await harness.detect({ documentId: "source-doc-2", frameId: 8 })).code,
+    "resume-interrupted");
+  assert.equal(harness.resumes.length, 1);
+});
+
 test("a durable commit survives outer-channel loss and duplicate commit delivery", async () => {
   const harness = await createHarness();
   harness.setOuterResponseFailsAfterCommit(true);
@@ -326,7 +500,7 @@ test("only status is accepted from the exact popup sender and it exposes no site
   assert.equal(harness.cookieClears.length, 0);
 
   const status = await harness.popup("get-status");
-  assert.equal(status.version, "1.1.0");
+  assert.equal(status.version, "1.1.1");
   assert.deepEqual(Object.keys(status).sort(), [
     "activeCount",
     "canFixCurrentPage",
@@ -361,7 +535,7 @@ test("fresh install skips the generic startup scan and probes its active Report 
   }]);
   assert.deepEqual(harness.activationProbes[0], {
     tabId: 20,
-    message: { type: "sf-activation-probe", build: "1.1.0", protocol: 1 },
+    message: { type: "sf-activation-probe", build: "1.1.1", protocol: 1 },
     options: { frameId: 0 }
   });
   assert.equal(harness.tabGets.length, 0);
@@ -390,7 +564,7 @@ test("a version transition records the new build and skips an immediate active-t
     initialTab: makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` })
   });
   await settle();
-  assert.equal(harness.local[SF_ACTIVATION_BUILD_KEY], "1.1.0");
+  assert.equal(harness.local[SF_ACTIVATION_BUILD_KEY], "1.1.1");
   assert.equal(harness.tabQueries.length, 0);
   assert.equal(harness.activationProbes.length, 0);
   assert.equal(harness.tabReloads.length, 0);
@@ -420,7 +594,7 @@ test("an absent install sentinel on Report Center home is tombstoned and reloade
   const attempt = harness.state().activationAttempts[0];
   assert.deepEqual(Object.keys(attempt).sort(), ["at", "phase", "tabId", "version"]);
   assert.equal(attempt.tabId, 20);
-  assert.equal(attempt.version, "1.1.0");
+  assert.equal(attempt.version, "1.1.1");
   assert.equal(attempt.phase, "reload-pending");
   assert.equal(JSON.stringify(attempt).includes("http"), false);
   assert.ok(
@@ -482,7 +656,7 @@ test("the popup reports current-tab state and schedules one guarded manual refre
     ok: true,
     code: "idle",
     activeCount: 0,
-    version: "1.1.0",
+    version: "1.1.1",
     canFixCurrentPage: true,
     currentPageState: "ready"
   });
@@ -493,7 +667,7 @@ test("the popup reports current-tab state and schedules one guarded manual refre
     ok: true,
     code: "manual-refresh-started",
     activeCount: 0,
-    version: "1.1.0",
+    version: "1.1.1",
     canFixCurrentPage: false,
     currentPageState: "ready"
   });
@@ -525,6 +699,80 @@ test("the popup reports current-tab state and schedules one guarded manual refre
   assert.equal(prepared.canFixCurrentPage, false);
 });
 
+test("a real toolbar popup can assess and manually refresh its last-focused SAP tab", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  // On Windows the toolbar popup can temporarily own native focus even though
+  // this remains the browser's last-focused normal window.
+  harness.setWindow({ id: 2, focused: false, incognito: false, type: "normal" });
+  harness.resetTrace();
+
+  assert.deepEqual(await harness.popup("get-status"), {
+    ok: true,
+    code: "idle",
+    activeCount: 0,
+    version: "1.1.1",
+    canFixCurrentPage: true,
+    currentPageState: "ready"
+  });
+  assert.deepEqual(harness.tabQueries[0], {
+    active: true,
+    lastFocusedWindow: true
+  });
+
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "manual-refresh-started");
+  await harness.until(() => harness.tabReloads.length === 1, 2_000);
+  assert.equal(harness.tabReloads.length, 1);
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-pending");
+});
+
+test("a safe Report Center tab that remains loading can use the guarded manual refresh", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({
+    status: "loading",
+    url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home`
+  }));
+  harness.resetTrace();
+
+  const status = await harness.popup("get-status");
+  assert.equal(status.code, "page-not-ready");
+  assert.equal(status.currentPageState, "loading");
+  assert.equal(status.canFixCurrentPage, true);
+
+  const accepted = await harness.popup("force-fix-current-tab");
+  assert.equal(accepted.code, "manual-refresh-started");
+  assert.equal(accepted.currentPageState, "loading");
+  await harness.until(() => harness.tabReloads.length === 1, 2_000);
+  assert.deepEqual(harness.tabReloads, [{ tabId: 20, details: { bypassCache: false } }]);
+});
+
+test("the delayed manual refresh is cancelled if the tab moves to another supported SAP route", async () => {
+  const harness = await createHarness();
+  const acceptedUrl = `${SF_ORIGIN}${STORY_REPORT_PATH}#/home`;
+  harness.setTab(makeStoryTab({ url: acceptedUrl }));
+  harness.resetTrace();
+
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "manual-refresh-started");
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/reports` }));
+
+  await settle(1_300);
+  assert.equal(harness.tabReloads.length, 0);
+  assert.deepEqual(harness.state().activationAttempts, []);
+});
+
+test("the delayed manual refresh is cancelled if another Edge window becomes last-focused", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.resetTrace();
+
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "manual-refresh-started");
+  harness.setWindow({ id: 1, focused: true, incognito: false, type: "normal" });
+
+  await settle(1_300);
+  assert.equal(harness.tabReloads.length, 0);
+  assert.deepEqual(harness.state().activationAttempts, []);
+});
+
 test("manual refresh clears only stale terminal records for the active tab", async () => {
   const harness = await createHarness();
   harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
@@ -550,8 +798,8 @@ test("manual refresh clears only stale terminal records for the active tab", asy
     at: oldAt
   });
   state.activationAttempts.push(
-    makeActivationRecoveryAttempt(20, "1.1.0", oldAt, "reload-attempted"),
-    makeActivationRecoveryAttempt(99, "1.1.0", oldAt, "reload-attempted")
+    makeActivationRecoveryAttempt(20, "1.1.1", oldAt, "reload-attempted"),
+    makeActivationRecoveryAttempt(99, "1.1.1", oldAt, "reload-attempted")
   );
   harness.setState(state);
   harness.resetTrace();
@@ -576,7 +824,11 @@ test("manual refresh clears only stale terminal records for the active tab", asy
 
 test("verified current-origin allowances are reported as applied and override old failures", async () => {
   const harness = await createHarness();
-  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.setTab(makeStoryTab({
+    status: "loading",
+    url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home`
+  }));
+  harness.setWindow({ id: 2, focused: false, incognito: false, type: "normal" });
   harness.local[RELIABLE_LEDGER_KEY] = {
     version: 1,
     entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
@@ -598,10 +850,35 @@ test("verified current-origin allowances are reported as applied and override ol
   const status = await harness.popup("get-status");
   assert.equal(status.code, "replay-scheduled");
   assert.equal(status.canFixCurrentPage, false);
-  assert.equal(status.currentPageState, "ready");
+  assert.equal(status.currentPageState, "loading");
   assert.equal(harness.cookieGets.length, 1);
   assert.equal((await harness.popup("force-fix-current-tab")).code, "fix-already-applied");
   assert.equal(harness.tabReloads.length, 0);
+});
+
+test("a durable replay result outranks advisory tab loading without a ledger read", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ status: "loading" }));
+  const state = createEmptyState();
+  state.recent.push({
+    sourceTabId: 20,
+    sourceWindowId: 2,
+    sourceFrameId: 7,
+    sourceDocumentId: "scheduled-document",
+    iasOrigin: IAS_ORIGIN,
+    sourceOrigin: SF_ORIGIN,
+    resumeAttemptId: ATTEMPT_ID,
+    outcome: "replay-scheduled",
+    at: Date.now() - 1_000
+  });
+  harness.setState(state);
+  harness.resetTrace();
+
+  const status = await harness.popup("get-status");
+  assert.equal(status.code, "replay-scheduled");
+  assert.equal(status.currentPageState, "loading");
+  assert.equal(status.canFixCurrentPage, false);
+  assert.equal(harness.events.includes("local-read"), false);
 });
 
 test("a stored allowance overridden by browser policy is not reported as applied", async () => {
@@ -641,7 +918,6 @@ test("an unverifiable effective allowance reports check-unavailable and manual a
 test("activation recovery rejects every ineligible or unsupported tab before probing", async () => {
   const cases = [
     { active: false },
-    { status: "loading" },
     { incognito: true },
     { discarded: true },
     { frozen: true },
@@ -661,6 +937,34 @@ test("activation recovery rejects every ineligible or unsupported tab before pro
     assert.equal(harness.tabReloads.length, 0, JSON.stringify(overrides));
     assert.deepEqual(harness.state().activationAttempts, [], JSON.stringify(overrides));
   }
+});
+
+test("a Report Center tab that remains loading is still probed and recovered at most once", async (t) => {
+  await t.test("current sentinel needs no refresh", async () => {
+    const harness = await createHarness();
+    harness.setTab(makeStoryTab({ status: "loading" }));
+    harness.resetTrace();
+
+    harness.fireActivated(20);
+    await harness.until(() => harness.activationProbes.length === 1);
+    await settle();
+    assert.equal(harness.tabReloads.length, 0);
+    assert.deepEqual(harness.state().activationAttempts, []);
+  });
+
+  await t.test("missing sentinel receives one cache-preserving refresh", async () => {
+    const harness = await createHarness();
+    harness.setTab(makeStoryTab({ status: "loading" }));
+    harness.setActivationProbeFails(true);
+    harness.resetTrace();
+
+    harness.fireActivated(20);
+    await harness.until(() => harness.tabReloads.length === 1);
+    assert.deepEqual(harness.tabReloads, [{ tabId: 20, details: { bypassCache: false } }]);
+    harness.fireActivated(20);
+    await settle(25);
+    assert.equal(harness.tabReloads.length, 1);
+  });
 });
 
 test("a stale sentinel triggers recovery but a changed final tab fails closed", async () => {
@@ -765,7 +1069,7 @@ test("a malformed sentinel response is not mistaken for the exact current build"
   harness.setTab(makeStoryTab());
   harness.setActivationProbeResponse({
     type: "sf-activation-current",
-    build: "1.1.0",
+    build: "1.1.1",
     protocol: 1,
     extra: true
   });
@@ -835,11 +1139,11 @@ test("workflow history, an existing attempt, or the global cap blocks probe and 
       at: Date.now()
     })],
     ["existing terminal attempt", (state) => state.activationAttempts.push(
-      makeActivationRecoveryAttempt(20, "1.1.0", Date.now(), "reload-attempted")
+      makeActivationRecoveryAttempt(20, "1.1.1", Date.now(), "reload-attempted")
     )],
     ["global cap", (state) => {
       state.activationAttempts = Array.from({ length: MAX_ACTIVATION_RECOVERY_ATTEMPTS }, (_, index) =>
-        makeActivationRecoveryAttempt(100 + index, "1.1.0", Date.now() - index)
+        makeActivationRecoveryAttempt(100 + index, "1.1.1", Date.now() - index)
       );
     }]
   ];
@@ -923,7 +1227,7 @@ test("the reloaded top-page sentinel hands pending recovery to IAS without permi
   });
   assert.deepEqual(harness.state().activationAttempts, [{
     tabId: 20,
-    version: "1.1.0",
+    version: "1.1.1",
     at: harness.state().activationAttempts[0].at,
     phase: "reload-attempted"
   }]);
@@ -979,7 +1283,7 @@ test("a later exact activation probe recovers a lost page-start handoff without 
 test("only a current supported top-page sentinel can cover a pending reload", async () => {
   const harness = await createHarness();
   const state = createEmptyState();
-  state.activationAttempts.push(makeActivationRecoveryAttempt(20, "1.1.0", Date.now()));
+  state.activationAttempts.push(makeActivationRecoveryAttempt(20, "1.1.1", Date.now()));
   harness.setState(state);
   harness.setTab(makeStoryTab({ status: "loading" }));
   harness.resetTrace();
@@ -992,7 +1296,7 @@ test("only a current supported top-page sentinel can cover a pending reload", as
     {
       message: {
         type: "sf-activation-ready",
-        build: "1.1.0",
+        build: "1.1.1",
         protocol: 1,
         extra: true
       }
@@ -1109,7 +1413,7 @@ async function createHarness(options = {}) {
   const session = {};
   const local = options.activationBuildMarker === null
     ? {}
-    : { [SF_ACTIVATION_BUILD_KEY]: options.activationBuildMarker || "1.1.0" };
+    : { [SF_ACTIVATION_BUILD_KEY]: options.activationBuildMarker || "1.1.1" };
   const alarms = new Map();
   const defaultTab = options.initialTab || {
       id: 10,
@@ -1126,6 +1430,7 @@ async function createHarness(options = {}) {
     [1, { id: 1, focused: true, incognito: false, type: "normal" }],
     [2, { id: 2, focused: true, incognito: false, type: "normal" }]
   ]);
+  let lastFocusedWindowId = 2;
   const events = [];
   const resumes = [];
   const cookieClears = [];
@@ -1149,12 +1454,14 @@ async function createHarness(options = {}) {
   let cookieClearFails = options.cookieClearFails === true;
   let cookieSetFails = options.cookieSetFails === true;
   let cookieGetFails = options.cookieGetFails === true;
+  let cookieGetHook = null;
   let commitStorageFails = false;
   let outerResponseFailsAfterCommit = false;
   let resumeHook = null;
+  let afterReplayCommitHook = null;
   let activationProbeResponse = {
     type: "sf-activation-current",
-    build: "1.1.0",
+    build: "1.1.1",
     protocol: 1
   };
   let activationProbeFails = false;
@@ -1168,7 +1475,7 @@ async function createHarness(options = {}) {
   let tabReloadFails = false;
   let windowGetFails = false;
   let windowGetHook = null;
-  let manifestVersion = options.manifestVersion || "1.1.0";
+  let manifestVersion = options.manifestVersion || "1.1.1";
   let resumeResponse = {
     ready: true,
     replayScheduled: true,
@@ -1301,6 +1608,7 @@ async function createHarness(options = {}) {
         async get(details) {
           cookieGets.push(clone(details));
           events.push("cookie-get");
+          await cookieGetHook?.(clone(details));
           if (cookieGetFails) throw new Error("cookie-get-failed");
           return { setting: effectiveCookieSetting };
         }
@@ -1319,6 +1627,16 @@ async function createHarness(options = {}) {
         if (!windows.has(windowId)) throw new Error("missing-window");
         return clone(windows.get(windowId));
       },
+      async getLastFocused(details) {
+        events.push("last-focused-window-read");
+        if (windowGetFails || !windows.has(lastFocusedWindowId)) throw new Error("missing-window");
+        const browserWindow = windows.get(lastFocusedWindowId);
+        if (
+          Array.isArray(details?.windowTypes) &&
+          !details.windowTypes.includes(browserWindow.type)
+        ) throw new Error("missing-window");
+        return clone(browserWindow);
+      },
       async update(windowId, update) {
         windowUpdates.push({ windowId, update: clone(update) });
         if (!windows.has(windowId)) throw new Error("missing-window");
@@ -1336,7 +1654,7 @@ async function createHarness(options = {}) {
         if (tabQueryFails) throw new Error("tab-query-failed");
         return [...tabs.values()].filter((tab) => {
           if (details?.active === true && tab.active !== true) return false;
-          if (details?.lastFocusedWindow === true && windows.get(tab.windowId)?.focused !== true) return false;
+          if (details?.lastFocusedWindow === true && tab.windowId !== lastFocusedWindowId) return false;
           if (Array.isArray(details?.url) && !isSupportedReportCenterUrl(tab.url)) return false;
           return true;
         }).map(clone);
@@ -1362,7 +1680,7 @@ async function createHarness(options = {}) {
       async sendMessage(tabId, message, sendOptions) {
         if (message?.type === "sf-activation-probe") {
           assert.deepEqual(Object.keys(message).sort(), ["build", "protocol", "type"]);
-          assert.equal(message.build, "1.1.0");
+          assert.equal(message.build, "1.1.1");
           assert.equal(message.protocol, 1);
           assert.deepEqual(sendOptions, { frameId: 0 });
           activationProbes.push({ tabId, message: clone(message), options: clone(sendOptions) });
@@ -1406,6 +1724,7 @@ async function createHarness(options = {}) {
           ) {
             replayCommitAcks += 1;
             events.push("replay-commit-acknowledged");
+            await afterReplayCommitHook?.({ tabId, message, options: sendOptions });
             if (outerResponseFailsAfterCommit) throw new Error("outer-channel-lost");
             return clone(resumeResponse);
           }
@@ -1467,6 +1786,9 @@ async function createHarness(options = {}) {
   await import(`../src/background.js?test=${Date.now()}-${Math.random()}`);
 
   let coldResult;
+  let coldStatus;
+  let coldStatusResolvedBeforeRelease = false;
+  let coldStatusElapsedMs = 0;
   let coldEvents = [];
   if (options.coldDetection) {
     const pending = dispatch(
@@ -1478,6 +1800,23 @@ async function createHarness(options = {}) {
     coldEvents = [...events];
     releaseInitialRead?.();
     coldResult = await pending;
+  } else if (options.coldStatus) {
+    const statusStartedAt = Date.now();
+    const pending = dispatch(
+      { type: "get-status" },
+      { id: fakeChrome.runtime.id, url: fakeChrome.runtime.getURL("src/popup.html") }
+    );
+    let statusSettled = false;
+    pending.then(() => { statusSettled = true; });
+    await Promise.race([
+      pending,
+      new Promise((resolve) => setTimeout(resolve, 900))
+    ]);
+    coldStatusResolvedBeforeRelease = statusSettled;
+    coldStatusElapsedMs = Date.now() - statusStartedAt;
+    coldEvents = [...events];
+    releaseInitialRead?.();
+    coldStatus = await pending;
   } else {
     releaseInitialRead?.();
   }
@@ -1516,6 +1855,9 @@ async function createHarness(options = {}) {
     windowUpdates,
     activationProbes,
     coldResult,
+    coldStatus,
+    coldStatusResolvedBeforeRelease,
+    coldStatusElapsedMs,
     coldEvents,
     startupEvents,
     get replayCommitAcks() { return replayCommitAcks; },
@@ -1530,9 +1872,11 @@ async function createHarness(options = {}) {
     setCookieClearFails(value) { cookieClearFails = value; },
     setCookieSetFails(value) { cookieSetFails = value; },
     setCookieGetFails(value) { cookieGetFails = value; },
+    setCookieGetHook(value) { cookieGetHook = value; },
     setCommitStorageFails(value) { commitStorageFails = value; },
     setOuterResponseFailsAfterCommit(value) { outerResponseFailsAfterCommit = value; },
     setResumeHook(value) { resumeHook = value; },
+    setAfterReplayCommitHook(value) { afterReplayCommitHook = value; },
     setResumeResponse(value) { resumeResponse = clone(value); },
     setActivationProbeResponse(value) { activationProbeResponse = clone(value); },
     setActivationProbeFails(value) { activationProbeFails = value; },
@@ -1548,7 +1892,11 @@ async function createHarness(options = {}) {
     setWindowGetHook(value) { windowGetHook = value; },
     setManifestVersion(value) { manifestVersion = value; },
     setTab(tab) { tabs.set(tab.id, clone(tab)); },
-    setWindow(browserWindow) { windows.set(browserWindow.id, clone(browserWindow)); },
+    setWindow(browserWindow) {
+      windows.set(browserWindow.id, clone(browserWindow));
+      if (browserWindow.focused === true) lastFocusedWindowId = browserWindow.id;
+    },
+    setLastFocusedWindowId(windowId) { lastFocusedWindowId = windowId; },
     removeTab(tabId) { tabs.delete(tabId); },
     resetTrace() {
       events.length = 0;
@@ -1576,7 +1924,7 @@ async function createHarness(options = {}) {
       return dispatch(
         overrides.message || {
           type: "sf-activation-ready",
-          build: "1.1.0",
+          build: "1.1.1",
           protocol: 1
         },
         activationSender(overrides)
@@ -1636,6 +1984,9 @@ async function createHarness(options = {}) {
       );
       await settle();
     },
+    async startWorker() {
+      await import(`../src/background.js?worker=${Date.now()}-${Math.random()}`);
+    },
     until
   };
   return harness;
@@ -1651,6 +2002,18 @@ async function until(predicate, timeoutMs = 2_000) {
 
 async function settle(milliseconds = 10) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function untilMicrotask(predicate, iterations = 200) {
+  for (let index = 0; index < iterations; index += 1) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error("timed out waiting for microtask condition");
+}
+
+async function flushMicrotasks(iterations = 20) {
+  for (let index = 0; index < iterations; index += 1) await Promise.resolve();
 }
 
 function clone(value) {

@@ -27,9 +27,13 @@ const RELIABLE_RETRY_MS = 60_000;
 const CONTENT_SETTINGS_PERMISSION = Object.freeze({ permissions: ["contentSettings"] });
 const LEGACY_RELIABLE_CONTROL_KEY = "sapIasReliableModeControl.v1";
 const SF_ACTIVATION_BUILD_KEY = "sapStoryAccessActivationBuild.v1";
-const SF_ACTIVATION_BUILD = "1.1.0";
+const SF_ACTIVATION_BUILD = "1.1.1";
 const SF_ACTIVATION_PROTOCOL = 1;
 const SF_ACTIVATION_PROBE_TIMEOUT_MS = 750;
+const POPUP_STATUS_TIMEOUT_MS = 750;
+const POPUP_STATUS_SNAPSHOT_STALE_MS = 2_000;
+const MAX_PUBLIC_STATUS_SNAPSHOTS = 2;
+const DIRECT_RESUME_TIMEOUT_MS = 5_000;
 const MANUAL_FIX_COOLDOWN_MS = 30_000;
 const MANUAL_RELOAD_DELAY_MS = 1_200;
 const SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS = Object.freeze(
@@ -40,6 +44,9 @@ const SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS = Object.freeze(
 
 let stateQueue = Promise.resolve();
 let reliableQueue = Promise.resolve();
+let publicStatusSnapshotPromise = null;
+let publicStatusSnapshotStale = false;
+const publicStatusSnapshotsInFlight = new Set();
 
 // Invoke this before registering listeners or starting any asynchronous ledger work.
 // storage.local is otherwise readable by content scripts in Chromium.
@@ -60,9 +67,14 @@ void Promise.all([startupRecoveryPromise, startupActivationScanDecisionPromise])
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // A preparing startup recovery needs its exact document to cross the commit
   // barrier before recovery itself can finish.
-  const dispatchPromise = message?.type === "replay-schedule-ready"
-    ? initializationPromise.then(() => dispatchMessage(message, sender))
-    : startupRecoveryPromise.then(() => dispatchMessage(message, sender));
+  const dispatchPromise = message?.type === "get-status"
+    // The popup is a read-only, sender-restricted status surface. It must not
+    // wait behind cold-worker allowance reconciliation or a resumed SAP
+    // continuation. Any in-flight durable write is reflected by a later poll.
+    ? Promise.resolve().then(() => dispatchMessage(message, sender))
+    : message?.type === "replay-schedule-ready"
+      ? initializationPromise.then(() => dispatchMessage(message, sender))
+      : startupRecoveryPromise.then(() => dispatchMessage(message, sender));
   dispatchPromise
     .then((result) => sendResponse({ ok: true, ...result }))
     .catch((error) => {
@@ -162,7 +174,7 @@ async function evaluateReportCenterTabById(tabId) {
 }
 
 async function evaluateReportCenterTabForRecovery(tab) {
-  if (!isEligibleReportCenterTab(tab)) return;
+  if (!isSafeReportCenterTab(tab)) return;
   const state = await readStateAfterPendingWrites();
   const pendingAttempt = state.activationAttempts.find(
     (attempt) =>
@@ -204,7 +216,7 @@ async function coverPendingActivationAfterProbe(tabId) {
     } catch {
       return false;
     }
-    if (!isEligibleReportCenterTab(tab) || !await isFocusedNormalWindow(tab.windowId)) return false;
+    if (!isSafeReportCenterTab(tab) || !await isFocusedNormalWindow(tab.windowId)) return false;
 
     const result = await markActivationReloadAttempted(tabId);
     return result.code === "sf-activation-ready";
@@ -221,7 +233,7 @@ async function claimAndReloadStoryTab(tabId) {
     } catch {
       return false;
     }
-    if (!isEligibleReportCenterTab(tab)) return false;
+    if (!isSafeReportCenterTab(tab)) return false;
     if (!await isFocusedNormalWindow(tab.windowId)) return false;
 
     const claimed = await mutateState((state) => {
@@ -246,7 +258,7 @@ async function claimAndReloadStoryTab(tabId) {
       return false;
     }
     if (
-      !isEligibleReportCenterTab(finalTab) ||
+      !isSafeReportCenterTab(finalTab) ||
       finalTab.windowId !== tab.windowId ||
       !await isFocusedNormalWindow(finalTab.windowId)
     ) {
@@ -298,13 +310,13 @@ function isCurrentStoryActivationSentinel(value) {
   );
 }
 
-function isEligibleReportCenterTab(tab) {
+function isSafeReportCenterTab(tab) {
   return Boolean(
     tab &&
     Number.isInteger(tab.id) &&
     tab.id > 0 &&
     tab.active === true &&
-    tab.status === "complete" &&
+    ["loading", "complete"].includes(tab.status) &&
     tab.incognito === false &&
     tab.discarded !== true &&
     tab.frozen !== true &&
@@ -321,6 +333,21 @@ async function isFocusedNormalWindow(windowId) {
       browserWindow &&
       browserWindow.id === windowId &&
       browserWindow.focused === true &&
+      browserWindow.incognito !== true &&
+      browserWindow.type === "normal"
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function isLastFocusedNormalWindow(windowId) {
+  if (!Number.isInteger(windowId) || windowId < 0) return false;
+  try {
+    const browserWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    return Boolean(
+      browserWindow &&
+      browserWindow.id === windowId &&
       browserWindow.incognito !== true &&
       browserWindow.type === "normal"
     );
@@ -627,12 +654,12 @@ async function executeDirectWorkflow(snapshot) {
   }
   let response;
   try {
-    response = await chrome.tabs.sendMessage(
-      claimed.sourceTabId,
-      { type: "resume-with-cookie-exception", resumeAttemptId: claimed.resumeAttemptId },
-      { documentId: claimed.sourceDocumentId }
-    );
+    response = await requestExactDocumentResume(claimed);
   } catch {
+    // The content document must durably commit replay scheduling before it can
+    // submit. A lost or hung outer response is therefore safe to resolve from
+    // the ledger. Without that durable evidence, tombstone the exact attempt:
+    // never retry an ambiguous continuation that might still answer late.
     if (await hasReplayScheduled(claimed)) {
       await focusSourceTab(claimed);
       return { code: "replay-scheduled" };
@@ -675,6 +702,42 @@ async function executeDirectWorkflow(snapshot) {
   await focusSourceTab(claimed);
   await finalizeDirectWorkflow(claimed, "resume-interrupted");
   return { code: "resume-interrupted" };
+}
+
+function requestExactDocumentResume(workflow) {
+  // Chromium message channels can remain pending after a document or worker
+  // lifecycle change. Keep the startup recovery chain bounded while consuming
+  // every late resolution/rejection. Late documents still face the independent
+  // durable commit barrier and cannot submit after this attempt is tombstoned.
+  const request = Promise.resolve().then(() => chrome.tabs.sendMessage(
+    workflow.sourceTabId,
+    { type: "resume-with-cookie-exception", resumeAttemptId: workflow.resumeAttemptId },
+    { documentId: workflow.sourceDocumentId }
+  ));
+
+  return new Promise((resolve, reject) => {
+    let pending = true;
+    const timeoutId = setTimeout(() => {
+      if (!pending) return;
+      pending = false;
+      reject(new Error("direct-resume-timeout"));
+    }, DIRECT_RESUME_TIMEOUT_MS);
+
+    request.then(
+      (response) => {
+        if (!pending) return;
+        pending = false;
+        clearTimeout(timeoutId);
+        resolve(response);
+      },
+      (error) => {
+        if (!pending) return;
+        pending = false;
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
 }
 
 async function blockAutomaticWorkflow(snapshot) {
@@ -1015,18 +1078,86 @@ async function setLastStatus(code) {
 }
 
 async function getPublicStatus() {
-  const context = await getActiveReportCenterContext();
-  const state = await readStateAfterPendingWrites();
-  const allowance = context.tab
+  let timer;
+  try {
+    return await Promise.race([
+      getSingleFlightPublicStatusSnapshot(),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(makeUnavailablePublicStatus()), POPUP_STATUS_TIMEOUT_MS);
+      })
+    ]);
+  } catch {
+    return makeUnavailablePublicStatus();
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function getSingleFlightPublicStatusSnapshot() {
+  if (publicStatusSnapshotPromise && !publicStatusSnapshotStale) {
+    return publicStatusSnapshotPromise;
+  }
+  // Browser API promises are not cancellable. Permit one fresh replacement
+  // after a stalled snapshot, but retain a strict cap so a pathological API
+  // cannot accumulate work while the popup keeps polling.
+  if (publicStatusSnapshotPromise &&
+      publicStatusSnapshotsInFlight.size >= MAX_PUBLIC_STATUS_SNAPSHOTS) {
+    return publicStatusSnapshotPromise;
+  }
+  const snapshot = Promise.resolve().then(getPublicStatusSnapshot);
+  publicStatusSnapshotPromise = snapshot;
+  publicStatusSnapshotStale = false;
+  publicStatusSnapshotsInFlight.add(snapshot);
+  const staleTimer = setTimeout(() => {
+    if (publicStatusSnapshotPromise === snapshot) {
+      publicStatusSnapshotStale = true;
+    }
+  }, POPUP_STATUS_SNAPSHOT_STALE_MS);
+  const clear = () => {
+    clearTimeout(staleTimer);
+    publicStatusSnapshotsInFlight.delete(snapshot);
+    if (publicStatusSnapshotPromise === snapshot) {
+      publicStatusSnapshotPromise = null;
+      publicStatusSnapshotStale = false;
+    }
+  };
+  // Handle both branches so a rejected snapshot cannot become unhandled after
+  // all callers have already returned their bounded fail-soft status.
+  void snapshot.then(clear, clear);
+  return snapshot;
+}
+
+async function getPublicStatusSnapshot() {
+  // A live popup intentionally reads the last durable snapshot instead of
+  // waiting for stateQueue. If a write is in flight, the next non-overlapping
+  // poll observes it without blocking the popup behind that mutation.
+  const [context, state] = await Promise.all([
+    getActiveReportCenterContext(),
+    readState()
+  ]);
+  const allowance = context.tab && !hasImmediateStatusEvidence(state, context.tab.id)
     ? await assessActiveAllowanceForTab(context.tab)
     : { active: false, available: true };
-  const code = contextualStatusCode(state, context, allowance);
+  return makePublicStatus(state, context, allowance);
+}
+
+function makePublicStatus(state, context, allowance) {
   return {
-    code,
+    code: contextualStatusCode(state, context, allowance),
     activeCount: state.workflows.length,
     version: chrome.runtime.getManifest().version,
     canFixCurrentPage: canForceFixCurrentPage(state, context, allowance),
     currentPageState: context.pageState
+  };
+}
+
+function makeUnavailablePublicStatus() {
+  return {
+    code: "check-unavailable",
+    activeCount: 0,
+    version: chrome.runtime.getManifest().version,
+    canFixCurrentPage: false,
+    currentPageState: "unavailable"
   };
 }
 
@@ -1038,11 +1169,6 @@ async function handleForceFixCurrentTab() {
       return makeManualResult("check-unavailable", context, false, 0);
     }
     if (!context.tab) return makeManualResult("wrong-page", context, false, 0);
-    if (context.pageState !== "ready") {
-      const state = await readStateAfterPendingWrites();
-      return makeManualResult("page-not-ready", context, false, state.workflows.length);
-    }
-
     return await withReliableLock(async () => {
       await requireProtectedLocalStorage();
 
@@ -1056,9 +1182,10 @@ async function handleForceFixCurrentTab() {
         return makeManualResult("wrong-page", { tab: null, pageState: "unsupported" }, false, 0);
       }
       if (
-        !isEligibleReportCenterTab(currentTab) ||
+        !isSafeReportCenterTab(currentTab) ||
         currentTab.windowId !== context.tab.windowId ||
-        !await isFocusedNormalWindow(currentTab.windowId)
+        currentTab.url !== context.tab.url ||
+        !await isLastFocusedNormalWindow(currentTab.windowId)
       ) {
         const state = await readStateAfterPendingWrites();
         return makeManualResult("page-not-ready", { tab: currentTab, pageState: "loading" }, false, state.workflows.length);
@@ -1138,9 +1265,10 @@ async function handleForceFixCurrentTab() {
         return makeManualResult("manual-fix-failed", context, false, claimed.activeCount);
       }
       if (
-        !isEligibleReportCenterTab(finalTab) ||
+        !isSafeReportCenterTab(finalTab) ||
         finalTab.windowId !== currentTab.windowId ||
-        !await isFocusedNormalWindow(finalTab.windowId)
+        finalTab.url !== currentTab.url ||
+        !await isLastFocusedNormalWindow(finalTab.windowId)
       ) {
         await removeActivationAttempt(currentTab.id, SF_ACTIVATION_BUILD);
         const nextState = isSupportedReportCenterUrl(finalTab.url) ? "loading" : "unsupported";
@@ -1151,10 +1279,13 @@ async function handleForceFixCurrentTab() {
       // Give the popup time to render the accepted result before the underlying
       // page reload can close it. The delayed side effect revalidates again and
       // remains covered by the already-durable one-shot claim.
-      scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId);
+      scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId, currentTab.url);
       return makeManualResult(
         "manual-refresh-started",
-        { tab: finalTab, pageState: "ready" },
+        {
+          tab: finalTab,
+          pageState: finalTab.status === "complete" ? "ready" : "loading"
+        },
         false,
         claimed.activeCount
       );
@@ -1170,13 +1301,13 @@ async function handleForceFixCurrentTab() {
   }
 }
 
-function scheduleClaimedReportCenterReload(tabId, windowId) {
+function scheduleClaimedReportCenterReload(tabId, windowId, expectedUrl) {
   setTimeout(() => {
-    void performClaimedReportCenterReload(tabId, windowId).catch(() => undefined);
+    void performClaimedReportCenterReload(tabId, windowId, expectedUrl).catch(() => undefined);
   }, MANUAL_RELOAD_DELAY_MS);
 }
 
-async function performClaimedReportCenterReload(tabId, windowId) {
+async function performClaimedReportCenterReload(tabId, windowId, expectedUrl) {
   let tab;
   try {
     tab = await chrome.tabs.get(tabId);
@@ -1194,8 +1325,9 @@ async function performClaimedReportCenterReload(tabId, windowId) {
   if (
     !scheduled ||
     tab.windowId !== windowId ||
-    !isEligibleReportCenterTab(tab) ||
-    !await isFocusedNormalWindow(tab.windowId)
+    tab.url !== expectedUrl ||
+    !isSafeReportCenterTab(tab) ||
+    !await isLastFocusedNormalWindow(tab.windowId)
   ) {
     if (scheduled) await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
     return;
@@ -1222,8 +1354,9 @@ async function performClaimedReportCenterReload(tabId, windowId) {
   }
   if (
     tab.windowId !== windowId ||
-    !isEligibleReportCenterTab(tab) ||
-    !await isFocusedNormalWindow(tab.windowId)
+    tab.url !== expectedUrl ||
+    !isSafeReportCenterTab(tab) ||
+    !await isLastFocusedNormalWindow(tab.windowId)
   ) {
     await removeActivationAttempt(tabId, SF_ACTIVATION_BUILD);
     return;
@@ -1240,8 +1373,7 @@ async function getActiveReportCenterContext() {
   try {
     tabs = await chrome.tabs.query({
       active: true,
-      lastFocusedWindow: true,
-      url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS
+      lastFocusedWindow: true
     });
   } catch {
     return { tab: null, pageState: "unavailable" };
@@ -1250,15 +1382,19 @@ async function getActiveReportCenterContext() {
     ? tabs.find((candidate) => isSupportedReportCenterUrl(candidate?.url))
     : null;
   if (!tab) return { tab: null, pageState: "unsupported" };
-  if (!isEligibleReportCenterTab(tab)) return { tab, pageState: "loading" };
-  if (!await isFocusedNormalWindow(tab.windowId)) return { tab: null, pageState: "unsupported" };
-  return { tab, pageState: "ready" };
+  if (!isSafeReportCenterTab(tab)) return { tab, pageState: "loading" };
+  // A toolbar action popup can temporarily own native focus on Windows. The
+  // underlying Edge window is still the user's last-focused normal window,
+  // which is the browser-defined context for an action-popup request.
+  if (!await isLastFocusedNormalWindow(tab.windowId)) {
+    return { tab: null, pageState: "unsupported" };
+  }
+  return { tab, pageState: tab.status === "complete" ? "ready" : "loading" };
 }
 
 function contextualStatusCode(state, context, allowance) {
   if (context.pageState === "unavailable") return "check-unavailable";
   if (!context.tab) return "unsupported-page";
-  if (context.pageState !== "ready") return "page-not-ready";
   const tabId = context.tab.id;
   if (state.workflows.some((workflow) => workflow.sourceTabId === tabId)) {
     return "continuation-in-progress";
@@ -1279,11 +1415,26 @@ function contextualStatusCode(state, context, allowance) {
   const prepared = state.activationAttempts.find(
     (attempt) => attempt.tabId === tabId && attempt.phase === "reload-attempted"
   );
-  return prepared ? "page-prepared" : "idle";
+  if (prepared) return "page-prepared";
+  return context.pageState === "loading" ? "page-not-ready" : "idle";
+}
+
+function hasImmediateStatusEvidence(state, tabId) {
+  return Boolean(
+    state.workflows.some((workflow) => workflow.sourceTabId === tabId) ||
+    state.activationAttempts.some(
+      (attempt) =>
+        attempt.tabId === tabId &&
+        ["reload-scheduled", "reload-pending"].includes(attempt.phase)
+    ) ||
+    state.recent.some(
+      (entry) => entry.sourceTabId === tabId && entry.outcome === "replay-scheduled"
+    )
+  );
 }
 
 function canForceFixCurrentPage(state, context, allowance, now = Date.now()) {
-  if (!context.tab || context.pageState !== "ready") return false;
+  if (!context.tab || !["loading", "ready"].includes(context.pageState)) return false;
   const tabId = context.tab.id;
   if (state.workflows.some((workflow) => workflow.sourceTabId === tabId)) return false;
   if (state.activationAttempts.some(
@@ -1324,17 +1475,20 @@ async function assessActiveAllowanceForTab(tab) {
   const entries = ledger.entries.filter((entry) => entry.sourceOrigin === sourceOrigin);
   if (!entries.length) return { active: false, available: true };
 
-  let policyReadFailed = false;
-  for (const entry of entries) {
+  // A profile may have several exact IAS tenants for the same SuccessFactors
+  // origin. Read them concurrently so a bounded popup status never scales
+  // linearly with the ledger size. This remains read-only and capped at 20.
+  const results = await Promise.all(entries.map(async (entry) => {
     try {
       const pair = makeCookieExceptionPair(entry.iasOrigin, entry.sourceOrigin);
       const effective = await getEffectiveCookieSetting(pair);
-      if (effective?.setting === "allow") return { active: true, available: true };
+      return effective?.setting === "allow" ? "allow" : "not-allow";
     } catch {
-      policyReadFailed = true;
+      return "failed";
     }
-  }
-  return policyReadFailed
+  }));
+  if (results.includes("allow")) return { active: true, available: true };
+  return results.includes("failed")
     ? { active: false, available: false }
     : { active: false, available: true };
 }

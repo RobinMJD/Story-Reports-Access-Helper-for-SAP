@@ -18,7 +18,7 @@
     ".hr.cloud.sap",
     ".sapcloud.cn"
   ];
-  const OBSERVER_TIMEOUT_MS = 10_000;
+  const ACTIVATED_DETECTION_DELAY_MS = 600;
   const DORMANT_DETECTION_DELAY_MS = 2_500;
   const REPLAY_FIELD_SCHEMA = new Map([
     ["utf8", "hidden"],
@@ -38,6 +38,7 @@
 
   let reported = false;
   let reportTimer = 0;
+  let dormantTimer = 0;
   let resumeAttempted = false;
   const sourceOrigin = getTrustedTopLevelOrigin();
   if (!sourceOrigin) return;
@@ -58,19 +59,26 @@
     return false;
   });
 
-  const observer = new MutationObserver(scheduleInterstitialCheck);
+  const observer = new MutationObserver(scheduleInterstitialChecks);
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-  window.setTimeout(() => observer.disconnect(), OBSERVER_TIMEOUT_MS);
-  window.setTimeout(checkDormantInterstitial, DORMANT_DETECTION_DELAY_MS);
-  scheduleInterstitialCheck();
+  scheduleInterstitialChecks();
 
-  function scheduleInterstitialCheck() {
-    if (reported || reportTimer) return;
-    reportTimer = window.setTimeout(() => {
-      reportTimer = 0;
-      if (reported || !findActivatedStorageAccessInterstitial()) return;
-      reportInterstitial();
-    }, 600);
+  function scheduleInterstitialChecks() {
+    if (reported) return;
+    if (!reportTimer) {
+      reportTimer = window.setTimeout(() => {
+        reportTimer = 0;
+        if (reported || !findActivatedStorageAccessInterstitial()) return;
+        reportInterstitial();
+      }, ACTIVATED_DETECTION_DELAY_MS);
+    }
+    if (reported) return;
+    if (!dormantTimer) {
+      dormantTimer = window.setTimeout(() => {
+        dormantTimer = 0;
+        void checkDormantInterstitial();
+      }, DORMANT_DETECTION_DELAY_MS);
+    }
   }
 
   async function checkDormantInterstitial() {
@@ -96,6 +104,14 @@
     if (reported) return;
     reported = true;
     observer.disconnect();
+    if (reportTimer) {
+      window.clearTimeout(reportTimer);
+      reportTimer = 0;
+    }
+    if (dormantTimer) {
+      window.clearTimeout(dormantTimer);
+      dormantTimer = 0;
+    }
     sendRuntimeMessage({ type: "interstitial-detected", sourceOrigin });
   }
 
