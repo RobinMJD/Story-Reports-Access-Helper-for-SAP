@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import { fetchTextWithPolicy } from "./http-request.mjs";
 
 const API_BASE = "https://api.addons.microsoftedge.microsoft.com/v1";
 const DEFAULT_EDGE_CERTIFICATION_NOTES = [
@@ -58,6 +59,14 @@ export function buildEdgeEndpoints(productId) {
   };
 }
 
+export function buildEdgeCertificationRequest(headers, certificationNotes) {
+  return {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" },
+    body: certificationNotes
+  };
+}
+
 export function extractEdgeOperationId(location) {
   const value = String(location || "").trim().replace(/\/+$/, "");
   if (!value) return "";
@@ -109,11 +118,10 @@ async function main() {
   );
 
   console.log("Submitting Microsoft Edge Add-ons update for certification...");
-  const publishOperation = await startOperation(endpoints.publishUrl, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({ notes: config.certificationNotes })
-  });
+  const publishOperation = await startOperation(
+    endpoints.publishUrl,
+    buildEdgeCertificationRequest(headers, config.certificationNotes)
+  );
   await pollOperation(
     endpoints.publishStatusUrl(publishOperation),
     headers,
@@ -124,9 +132,9 @@ async function main() {
   console.log(`Microsoft Edge Add-ons accepted ${basename(config.zipPath)} for certification; it is not live yet.`);
 }
 
-async function startOperation(url, init) {
-  const response = await fetch(url, init);
-  const text = await response.text();
+export async function startOperation(url, init) {
+  // Store mutations are not safely repeatable after an ambiguous network failure.
+  const { response, text } = await fetchTextWithPolicy(url, init, { attempts: 1, retryStatuses: false });
   if (response.status !== 202) {
     throw new Error(`Microsoft Edge Add-ons API failed (${response.status}): ${sanitizeEdgeMessage(text)}`);
   }
@@ -135,11 +143,14 @@ async function startOperation(url, init) {
   return operationId;
 }
 
-async function pollOperation(url, headers, attempts, intervalMs, label) {
+export async function pollOperation(url, headers, attempts, intervalMs, label) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (attempt > 1) await delay(intervalMs);
-    const response = await fetch(url, { method: "GET", headers });
-    const text = await response.text();
+    const { response, text } = await fetchTextWithPolicy(
+      url,
+      { method: "GET", headers },
+      { attempts: 3, retryNetwork: true }
+    );
     if (!response.ok) {
       throw new Error(`Microsoft Edge Add-ons ${label} status failed (${response.status}): ${sanitizeEdgeMessage(text)}`);
     }
