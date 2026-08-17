@@ -44,6 +44,7 @@ test("the renderer records overflow and safe-bound checks for every Store asset"
     report.specification.url,
     "https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension"
   );
+  assert.equal(report.specification.checkedOn, "2026-08-17");
   assert.deepEqual(new Set(names), new Set(expectedAssets.keys()));
   assert.ok(report.results.every(({ overflowFree, safeBounds }) => overflowFree && safeBounds));
   assert.ok(report.results.every(({ checkedSafeElements }) => checkedSafeElements > 0));
@@ -65,6 +66,19 @@ test("marketing sources use the original mark and contain no customer-specific m
   assert.doesNotMatch(publicSources, /https:\/\/[^"'\s]*successfactors\./i);
   assert.doesNotMatch(publicSources, /\b(?:tenant|customer|report)[-_]?[0-9]{2,}\b/i);
   assert.doesNotMatch(icon, /sap|successfactors|microsoft|edge/i);
+});
+
+test("marketing copy reflects live status and never instructs users to reopen the popup or Story", () => {
+  const generator = readFileSync(resolve("scripts/generate-store-assets.mjs"), "utf8");
+
+  assert.match(generator, /Checking this report/);
+  assert.match(generator, /This status updates automatically/);
+  assert.match(generator, /Fix this report/);
+  assert.match(generator, /Access fix applied/);
+  assert.match(generator, /hides the Fix button/);
+  assert.doesNotMatch(generator, /reopen/i);
+  assert.doesNotMatch(generator, /Fix not applied/);
+  assert.doesNotMatch(generator, /open the Story again/i);
 });
 
 test("the deterministic generator and public README include all four final screenshots", () => {

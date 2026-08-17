@@ -1,21 +1,26 @@
 const SAP_KB_URL = "https://userapps.support.sap.com/sap/support/knowledge/en/3039244";
 
+const STATUS_REQUEST_TIMEOUT_MS = 1_000;
+const STATUS_POLL_INTERVAL_MS = 500;
+const STATUS_RETRY_INTERVAL_MS = 250;
+const STATUS_FAILURE_THRESHOLD = 2;
+
 const STATUS_COPY = Object.freeze({
-  checking: ["Checking this page…", "Please wait a moment.", "checking"],
-  idle: ["No fix applied yet", "Open a Story Report. Help starts automatically if it is needed.", "neutral"],
-  unsupported: ["No fix applied yet", "Open SAP Report Center to get started.", "neutral"],
-  waiting: ["SAP is still loading", "Wait for the page to finish, then reopen this window.", "active"],
-  refreshing: ["Refreshing SAP…", "The page is being prepared. Please wait.", "active"],
-  refreshStarted: ["Refresh started", "Open the Story Report again when SAP is ready.", "active"],
-  fixing: ["Applying the fix…", "Please wait a few seconds.", "active"],
-  alreadyWorking: ["Fix already running", "Please wait, then return to the report.", "active"],
-  cooldown: ["Fix already started", "Wait a moment, then reopen this window if needed.", "active"],
-  prepared: ["SAP page prepared", "Open the Story Report again. Help will continue automatically.", "active"],
-  fixed: ["Fix applied", "The browser fix is active. Return to your report.", "success"],
+  checking: ["Checking this report…", "This status updates automatically.", "checking"],
+  idle: ["Extension ready", "Automatic help is active. Use the button only if the report is blank.", "neutral"],
+  unsupported: ["Extension ready", "Open SAP Report Center to check a report.", "neutral"],
+  waiting: ["Checking SAP…", "This status updates automatically.", "checking"],
+  refreshing: ["Preparing this report…", "This status updates automatically.", "checking"],
+  refreshStarted: ["Preparing this report…", "This status updates automatically.", "checking"],
+  fixing: ["Applying access fix…", "This status updates automatically.", "checking"],
+  alreadyWorking: ["Access fix is already running", "This status updates automatically.", "checking"],
+  cooldown: ["Access fix is already starting", "This status updates automatically.", "checking"],
+  prepared: ["Automatic help is ready", "The extension will continue if SAP requests access.", "active"],
+  fixed: ["Access fix applied", "Browser access was prepared for this SAP site.", "success"],
   wrongPage: ["Open SAP Report Center", "Go to the report page, then try again.", "neutral"],
-  manualFailed: ["Fix could not start", "Try the report again or open the SAP help article.", "warning"],
-  failed: ["Fix not applied", "Use Fix this report, then open the Story again.", "warning"],
-  unavailable: ["Status unavailable", "If the report is blank, you can still try the fix.", "warning"]
+  manualFailed: ["Access fix could not start", "Try the report again or open the SAP help article.", "warning"],
+  failed: ["Access fix not applied", "Use Fix this report if the Story Report is blank.", "warning"],
+  unavailable: ["Couldn’t confirm status", "If the report is blank, you can still try the fix.", "checking"]
 });
 
 const FAILED_CODES = new Set([
@@ -26,6 +31,12 @@ const FAILED_CODES = new Set([
   "incognito-not-supported",
   "error"
 ]);
+
+let statusPollTimer = null;
+let statusPollInFlight = false;
+let renderGeneration = 0;
+let consecutiveStatusFailures = 0;
+let hasRenderedRuntimeStatus = false;
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("fix-report").addEventListener("click", forceFixCurrentReport);
@@ -39,24 +50,45 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("version").textContent = `v${manifestVersion}`;
   }
 
-  void loadPopupState();
+  void pollPopupStatus();
 });
 
-async function loadPopupState() {
-  const response = await sendRuntimeMessage({ type: "get-status" });
-  const status = normalizeRuntimeResponse(response, true);
-  setStatusBusy(false);
-  if (!status) {
-    renderStatus("status-unavailable", true);
-    setFixVisibility(true);
+async function pollPopupStatus() {
+  if (statusPollInFlight) {
+    scheduleStatusPoll(STATUS_RETRY_INTERVAL_MS);
     return;
   }
 
-  renderStatus(status.code, status.canFixCurrentPage);
-  setFixVisibility(shouldShowFix(status));
-  if (typeof response.version === "string" && response.version) {
-    document.getElementById("version").textContent = `v${response.version}`;
+  statusPollInFlight = true;
+  const generation = ++renderGeneration;
+  const outcome = await sendRuntimeMessage({ type: "get-status" });
+  statusPollInFlight = false;
+
+  if (generation !== renderGeneration) return;
+
+  const status = outcome.kind === "response"
+    ? normalizeRuntimeResponse(outcome.response, true)
+    : null;
+
+  if (!status) {
+    consecutiveStatusFailures += 1;
+    if (consecutiveStatusFailures >= STATUS_FAILURE_THRESHOLD) {
+      renderStatus("status-unavailable", true);
+      setStatusBusy(true);
+      setFixVisibility(true);
+    } else if (!hasRenderedRuntimeStatus) {
+      renderStatus("checking", false);
+      setStatusBusy(true);
+      setFixVisibility(false);
+    }
+    scheduleStatusPoll(STATUS_RETRY_INTERVAL_MS);
+    return;
   }
+
+  consecutiveStatusFailures = 0;
+  hasRenderedRuntimeStatus = true;
+  applyRuntimeStatus(status, outcome.response);
+  scheduleStatusPoll(STATUS_POLL_INTERVAL_MS);
 }
 
 async function forceFixCurrentReport() {
@@ -64,25 +96,43 @@ async function forceFixCurrentReport() {
   const button = document.getElementById("fix-report");
   if (action.hidden || button.disabled) return;
 
+  cancelScheduledStatusPoll();
+  const generation = ++renderGeneration;
   button.disabled = true;
   button.setAttribute("aria-disabled", "true");
   button.setAttribute("aria-busy", "true");
   setStatusBusy(true);
   renderStatus("page-refreshing", false);
 
-  const response = await sendRuntimeMessage({ type: "force-fix-current-tab" });
-  const status = normalizeRuntimeResponse(response, false);
+  const outcome = await sendRuntimeMessage({ type: "force-fix-current-tab" });
+  if (generation !== renderGeneration) return;
+
   button.setAttribute("aria-busy", "false");
-  setStatusBusy(false);
+  const status = outcome.kind === "response"
+    ? normalizeRuntimeResponse(outcome.response, false)
+    : null;
 
   if (!status) {
     renderStatus("status-unavailable", true);
+    setStatusBusy(true);
     setFixVisibility(true);
+    scheduleStatusPoll(STATUS_RETRY_INTERVAL_MS);
     return;
   }
 
+  consecutiveStatusFailures = 0;
+  hasRenderedRuntimeStatus = true;
+  applyRuntimeStatus(status, outcome.response);
+  scheduleStatusPoll(STATUS_RETRY_INTERVAL_MS);
+}
+
+function applyRuntimeStatus(status, response) {
   renderStatus(status.code, status.canFixCurrentPage);
+  setStatusBusy(isBusyStatus(status.code));
   setFixVisibility(shouldShowFix(status));
+  if (typeof response?.version === "string" && response.version) {
+    document.getElementById("version").textContent = `v${response.version}`;
+  }
 }
 
 function openSapHelpArticle() {
@@ -93,7 +143,7 @@ function renderStatus(code, canFixCurrentPage) {
   const state = statusStateForCode(code);
   const [title, defaultDetail, className] = STATUS_COPY[state];
   const detail = state === "failed" && canFixCurrentPage === false
-    ? "Wait a moment, then reopen this window to try the fix."
+    ? "Automatic help could not complete. This status updates automatically."
     : defaultDetail;
 
   document.getElementById("status-title").textContent = title;
@@ -120,13 +170,27 @@ function statusStateForCode(code) {
   return "unavailable";
 }
 
+function isBusyStatus(code) {
+  return [
+    "checking",
+    "page-not-ready",
+    "page-refreshing",
+    "manual-refresh-started",
+    "continuation-in-progress",
+    "fix-in-progress",
+    "manual-fix-cooldown",
+    "check-unavailable",
+    "status-unavailable"
+  ].includes(code);
+}
+
 function shouldShowFix(status) {
   const state = statusStateForCode(status.code);
-  if (state === "unavailable") return true;
-  if (state === "idle" || state === "failed" || state === "manualFailed") {
-    return status.canFixCurrentPage === true;
+  if (["fixed", "refreshing", "refreshStarted", "fixing", "alreadyWorking", "cooldown"].includes(state)) {
+    return false;
   }
-  return false;
+  if (status.canFixCurrentPage === true) return true;
+  return state === "unavailable";
 }
 
 function setFixVisibility(visible) {
@@ -136,7 +200,8 @@ function setFixVisibility(visible) {
   button.disabled = visible !== true;
   button.setAttribute("aria-disabled", String(button.disabled));
   if (visible === true) {
-    document.getElementById("fix-guidance").textContent = "Use this if the Story Report stays blank.";
+    button.setAttribute("aria-busy", "false");
+    document.getElementById("fix-guidance").textContent = "Use this only if the Story Report stays blank.";
   }
 }
 
@@ -155,18 +220,45 @@ function normalizeRuntimeResponse(response, requireAvailability) {
   };
 }
 
+function scheduleStatusPoll(delay) {
+  cancelScheduledStatusPoll();
+  statusPollTimer = setTimeout(() => {
+    statusPollTimer = null;
+    void pollPopupStatus();
+  }, delay);
+}
+
+function cancelScheduledStatusPoll() {
+  if (statusPollTimer === null) return;
+  clearTimeout(statusPollTimer);
+  statusPollTimer = null;
+}
+
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
+    let settled = false;
+    let timeout = null;
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== null) clearTimeout(timeout);
+      resolve(outcome);
+    };
+    timeout = setTimeout(
+      () => finish({ kind: "timeout", response: null }),
+      STATUS_REQUEST_TIMEOUT_MS
+    );
+
     try {
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
-          resolve(null);
+          finish({ kind: "error", response: null });
           return;
         }
-        resolve(response || null);
+        finish({ kind: "response", response: response || null });
       });
     } catch {
-      resolve(null);
+      finish({ kind: "error", response: null });
     }
   });
 }

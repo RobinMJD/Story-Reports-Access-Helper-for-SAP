@@ -8,7 +8,7 @@ Story Reports Access Helper prepares the narrow browser-storage access required 
   <a href="https://microsoftedge.microsoft.com/addons/detail/bcmdpclnmpflaollgfjamioigkbpdmdc"><img src="docs/images/store-badges/microsoft-edge-addons.png" alt="Get it from Microsoft Edge" height="58"></a>
 </p>
 
-Current source version: **v1.1.0**
+Current source version: **v1.1.1**
 
 [![Story Reports Access Helper for SAP](docs/images/large-promo-1400x560.png)](docs/images/large-promo-1400x560.png)
 
@@ -19,10 +19,10 @@ Some SAP SuccessFactors Story Reports can remain blank when Microsoft Edge preve
 Story Reports Access Helper handles the compatible browser step automatically:
 
 - **No setup:** install it once and open Story Reports normally.
-- **Automatic recovery:** if Report Center was already open before installation or re-enablement, the extension prepares that exact active page with one normal refresh.
-- **Manual fallback:** if SAP still stays blank, select **Fix this report** for one safe refresh of the active Report Center page.
+- **Automatic recovery:** if Report Center was already open before installation or re-enablement, the extension can prepare that exact active page with one normal refresh, including when Edge still labels the tab as loading.
+- **Manual fallback:** if SAP still stays blank, select **Fix this report** for one safe refresh of the active supported Report Center page.
 - **Instance-aware:** the matching SAP Identity and SuccessFactors origins are derived from the live SAP frame context; no customer hostname is hardcoded.
-- **Clear status:** the popup says whether no fix has been needed yet, the extension is working, the SAP page is prepared, or the browser fix was applied.
+- **Live status:** the popup opens immediately on **Checking this report…** and updates itself while the extension checks, prepares, or applies the browser fix.
 - **Built-in help:** one button opens the public preview of SAP KBA 3039244 in a new tab.
 - **Local-first:** there is no telemetry, advertising, remote code, developer backend, or report-data collection.
 
@@ -31,7 +31,7 @@ Story Reports Access Helper handles the compatible browser step automatically:
 1. Install Story Reports Access Helper from Microsoft Edge Add-ons.
 2. Open SAP SuccessFactors and select a Story Report as usual.
 3. If the browser-storage issue is present, wait a few seconds while the extension prepares access.
-4. If the Story stays blank, open the extension and select **Fix this report**, then open the Story again.
+4. If the Story stays blank, open the extension. Its status updates automatically; select **Fix this report** if the button appears, then open the Story again after the one normal refresh.
 5. Use **Open SAP help article** for SAP's related troubleshooting guidance.
 
 That is the complete end-user setup. The extension never asks for a tenant, company, account, password, MFA code, or report identifier.
@@ -40,7 +40,7 @@ That is the complete end-user setup. The extension never asks for a tenant, comp
 
 For an eligible SAP flow, the extension:
 
-1. Detects SAP's exact storage-access page only when it is embedded in a supported SuccessFactors Story Report.
+1. Observes the matching embedded SAP page for its document lifetime and detects SAP's exact storage-access structure even when it appears after a slow load.
 2. Derives the exact SAP Identity Authentication origin and matching SuccessFactors top-level origin from browser-provided frame context.
 3. Creates and verifies a temporary cookie allowance for that exact pair only.
 4. Revalidates the same SAP-owned document and lets its existing sign-in form continue at most once.
@@ -48,11 +48,11 @@ For an eligible SAP flow, the extension:
 
 Microsoft Edge or enterprise policy can still prevent the setting from becoming effective. Expired SAP authentication, stricter tracking protection, missing authorization, and SAP-side changes remain authoritative. The extension stops rather than broadening access or entering a retry loop.
 
-If Report Center predates installation or re-enablement, Microsoft Edge cannot retroactively add the extension's static content script to that existing document. The helper checks the active supported Report Center tab after installation, on a same-build service-worker start (including re-enablement), when the tab is activated, and when Microsoft Edge reports a matching URL change or page-load completion. If its current-build marker is absent, it performs one ordinary, cache-preserving refresh. It never refreshes an unrelated or background tab and never loops that automatic refresh.
+If Report Center predates installation or re-enablement, Microsoft Edge cannot retroactively add the extension's static content script to that existing document. The helper checks the active supported Report Center tab after installation, on a same-build service-worker start (including re-enablement), when the tab is activated, and when Microsoft Edge reports a matching URL change or page-load completion. A safe matching tab can be probed and refreshed even while Edge still reports it as loading. If its current-build marker is absent, the extension performs one ordinary, cache-preserving refresh. It never refreshes an unrelated or background tab and never loops that automatic refresh.
 
-The popup checks the current page when it opens. Its **Fix this report** action appears only when the current result can be retried, except that it remains available as a safe fallback if the availability check itself cannot complete. The service worker always revalidates the active supported Report Center page, refuses to interrupt an in-progress continuation, records the attempt before one normal refresh, shows the result before that refresh begins, and never clears browser cookies. A 30-second repeat guard prevents rapid repeated refreshes.
+The popup paints its **Checking this report…** state immediately, uses bounded status requests, and keeps polling while it remains open. It updates in place when the page or fix state changes; users do not need to close and reopen it. Durable replay evidence or a currently effective exact allowance takes priority over Edge's advisory tab-loading state. **Fix this report** appears whenever the active supported page can be retried, including a safe matching tab that remains loading, and may also remain available as a fail-closed fallback if status cannot be confirmed. The service worker always revalidates the active supported Report Center page, refuses to interrupt an in-progress continuation, records the attempt before one normal refresh, shows the result before that refresh begins, and never clears browser cookies. A 30-second repeat guard prevents rapid repeated refreshes.
 
-**Fix applied** means either that the exact temporary browser setting is currently verified as effective for this SuccessFactors site or that the extension durably recorded the local one-use continuation step for this tab. It does not mean that SAP authentication, authorization, network delivery, or Story rendering succeeded.
+**Access fix applied** means either that the exact temporary browser setting is currently verified as effective for this SuccessFactors site or that the extension durably recorded the local one-use continuation step for this tab. It does not mean that SAP authentication, authorization, network delivery, or Story rendering succeeded.
 
 ## Privacy And Security
 

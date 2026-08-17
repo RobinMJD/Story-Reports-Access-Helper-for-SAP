@@ -104,6 +104,64 @@ test("a hidden exact structure is reported once by the bounded read-only fallbac
   assert.equal(alreadyActive.counters.hasAccessChecks, 1);
 });
 
+test("an exact hidden structure inserted after 30 seconds is detected once without polling", async () => {
+  const result = runInterstitialContext(SF_ORIGIN, {
+    structureInitiallyPresent: false,
+    grantDisplay: "none",
+    hasAccessSequence: [false],
+    deferDetectionTimers: true
+  });
+
+  await result.runTimersThrough(30_000);
+  assert.deepEqual(result.messages, []);
+  assert.equal(result.observer.active, true);
+  assert.equal(result.counters.hasAccessChecks, 0);
+
+  result.triggerMutation({ structurePresent: true });
+  await result.runTimersThrough(32_499);
+  assert.deepEqual(result.messages, []);
+  await result.runTimersThrough(32_500);
+
+  assert.deepEqual(clone(result.messages), [
+    { type: "interstitial-detected", sourceOrigin: SF_ORIGIN }
+  ]);
+  assert.equal(result.counters.hasAccessChecks, 1);
+  assert.equal(result.observer.active, false);
+  assert.equal(result.counters.observerDisconnects, 1);
+  assert.equal(result.pendingTimerCount(), 0);
+
+  result.triggerMutation();
+  await result.runTimersThrough(60_000);
+  assert.equal(result.messages.filter((message) => message.type === "interstitial-detected").length, 1);
+});
+
+test("an activated exact structure appearing after the former observer cutoff reports once", async () => {
+  const result = runInterstitialContext(SF_ORIGIN, {
+    structureInitiallyPresent: false,
+    deferDetectionTimers: true
+  });
+
+  await result.runTimersThrough(15_000);
+  assert.deepEqual(result.messages, []);
+  assert.equal(result.observer.active, true);
+
+  result.triggerMutation({ structurePresent: true });
+  await result.runTimersThrough(15_599);
+  assert.deepEqual(result.messages, []);
+  await result.runTimersThrough(15_600);
+
+  assert.deepEqual(clone(result.messages), [
+    { type: "interstitial-detected", sourceOrigin: SF_ORIGIN }
+  ]);
+  assert.equal(result.observer.active, false);
+  assert.equal(result.counters.observerDisconnects, 1);
+  assert.equal(result.pendingTimerCount(), 0);
+
+  result.triggerMutation();
+  await result.runTimersThrough(60_000);
+  assert.equal(result.messages.filter((message) => message.type === "interstitial-detected").length, 1);
+});
+
 test("direct continuation requires active storage access and never invokes an activation API", async () => {
   for (const options of [
     { hasAccessSequence: [false] },
@@ -284,14 +342,19 @@ function runInterstitialContext(ancestorOrigin, options = {}) {
     hasAccessChecks: 0,
     nativeSubmits: 0,
     navigationTeardowns: 0,
-    droppedResponseChannels: 0
+    droppedResponseChannels: 0,
+    observerDisconnects: 0
   };
   const events = [];
   const messages = [];
   const scheduledTimers = [];
   const responseChannels = new Set();
   let nextTimerId = 1;
+  let currentTime = 0;
   let runtimeListener = null;
+  let mutationObserver = null;
+  let structurePresent = options.structureInitiallyPresent !== false;
+  let grantDisplay = options.grantDisplay || "block";
 
   class HTMLElement {
     constructor() {
@@ -341,8 +404,20 @@ function runInterstitialContext(ancestorOrigin, options = {}) {
     }
   }
   class MutationObserver {
-    observe() {}
-    disconnect() {}
+    constructor(callback) {
+      this.callback = callback;
+      this.active = false;
+      mutationObserver = this;
+    }
+    observe() { this.active = true; }
+    disconnect() {
+      if (!this.active) return;
+      this.active = false;
+      counters.observerDisconnects += 1;
+    }
+    trigger() {
+      if (this.active) this.callback([], this);
+    }
   }
 
   const location = makeLocation(iasHostname, locationPath, [ancestorOrigin]);
@@ -364,8 +439,9 @@ function runInterstitialContext(ancestorOrigin, options = {}) {
 
   const documentObject = {
     documentElement: {},
-    getElementById: (id) => elements[id] || null,
+    getElementById: (id) => structurePresent ? elements[id] || null : null,
     querySelectorAll(selector) {
+      if (!structurePresent) return [];
       if (!selector.startsWith("#")) return [];
       const id = selector.slice(1);
       const element = elements[id];
@@ -397,18 +473,27 @@ function runInterstitialContext(ancestorOrigin, options = {}) {
     location,
     top: {},
     setTimeout(callback, delay) {
-      const timer = { callback, delay, id: nextTimerId++ };
+      const timer = { callback, delay, dueAt: currentTime + delay, id: nextTimerId++ };
       if (delay === 0) events.push("replay-task-registered");
-      if ((delay === 0 && options.deferZeroDelayTimers) || delay > 600) {
+      if (
+        (delay === 0 && options.deferZeroDelayTimers) ||
+        delay > 600 ||
+        (delay === 600 && options.deferDetectionTimers)
+      ) {
         scheduledTimers.push(timer);
       } else {
         callback();
+        return 0;
       }
       return timer.id;
     },
+    clearTimeout(timerId) {
+      const index = scheduledTimers.findIndex((timer) => timer.id === timerId);
+      if (index >= 0) scheduledTimers.splice(index, 1);
+    },
     getComputedStyle(element) {
       return {
-        display: element === elements.grantAccessDiv ? options.grantDisplay || "block" : "block",
+        display: element === elements.grantAccessDiv ? grantDisplay : "block",
         visibility: "visible",
         opacity: "1"
       };
@@ -471,16 +556,27 @@ function runInterstitialContext(ancestorOrigin, options = {}) {
     elements,
     controls,
     location,
+    observer: mutationObserver,
+    triggerMutation(next = {}) {
+      if (Object.hasOwn(next, "structurePresent")) structurePresent = next.structurePresent === true;
+      if (typeof next.grantDisplay === "string") grantDisplay = next.grantDisplay;
+      mutationObserver?.trigger();
+    },
+    pendingTimerCount() {
+      return scheduledTimers.length;
+    },
     async runTimersThrough(maxDelay) {
-      const due = scheduledTimers
-        .filter((timer) => timer.delay <= maxDelay)
-        .sort((left, right) => left.delay - right.delay || left.id - right.id);
-      for (const timer of due) {
-        const index = scheduledTimers.indexOf(timer);
-        if (index >= 0) scheduledTimers.splice(index, 1);
+      while (true) {
+        const timer = scheduledTimers
+          .filter((candidate) => candidate.dueAt <= maxDelay)
+          .sort((left, right) => left.dueAt - right.dueAt || left.id - right.id)[0];
+        if (!timer) break;
+        scheduledTimers.splice(scheduledTimers.indexOf(timer), 1);
+        currentTime = Math.max(currentTime, timer.dueAt);
         await timer.callback();
         await Promise.resolve();
       }
+      currentTime = Math.max(currentTime, maxDelay);
     },
     send(message, senderId = "test-extension") {
       return new Promise((resolve) => {

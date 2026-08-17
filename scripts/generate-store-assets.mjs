@@ -25,7 +25,7 @@ const QA_DIR = resolve("qa");
 const ICON_SOURCE = resolve("icons/icon-source.svg");
 const ICON_DATA_URL = `data:image/svg+xml;base64,${readFileSync(ICON_SOURCE).toString("base64")}`;
 const PRODUCT_NAME = "Story Reports Access Helper";
-const PRODUCT_VERSION = "1.1.0";
+const PRODUCT_VERSION = "1.1.1";
 const SUPPORT_ARTICLE = "SAP Knowledge Base article 3039244";
 const EDGE_SPEC_URL = "https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension";
 
@@ -39,26 +39,26 @@ const ASSET_SPECS = Object.freeze({
 const SCREENSHOTS = Object.freeze([
   {
     fileName: "screenshot-01-automatic-fix-1280x800.png",
-    eyebrow: "CURRENT-PAGE CHECK",
-    title: "Open the helper. Know what happens next.",
+    eyebrow: "LIVE STATUS",
+    title: "Open it once. Watch the status update.",
     description:
-      "It checks the active Report Center page first and shows a brief waiting state while it decides whether help is needed.",
+      "The window appears immediately with Checking this report, then updates in place as SAP and Edge settle.",
     body: automaticFixScene()
   },
   {
     fileName: "screenshot-02-simple-status-1280x800.png",
-    eyebrow: "GUIDED FALLBACK",
-    title: "One clear button when a manual fix is useful.",
+    eyebrow: "SAFE FALLBACK",
+    title: "One fix button—only when it can help.",
     description:
-      "If automatic help has not completed, Fix this report safely retries the active supported page and shows the result.",
+      "If the supported report stays blank while SAP or Edge is still settling, Fix this report safely refreshes that page and shows the result.",
     body: simpleStatusScene()
   },
   {
     fileName: "screenshot-03-built-in-help-1280x800.png",
     eyebrow: "CLEAR RESULT",
-    title: "See when the browser fix is active.",
+    title: "The fix result appears automatically.",
     description:
-      `Fix applied is shown only for a verified browser fix. ${SUPPORT_ARTICLE} remains one click away.`,
+      `Access fix applied confirms verified browser access and hides the Fix button. ${SUPPORT_ARTICLE} remains one click away.`,
     body: supportScene()
   },
   {
@@ -139,7 +139,7 @@ writeFileSync(
       specification: {
         authority: "Microsoft Edge Developer documentation",
         url: EDGE_SPEC_URL,
-        checkedOn: "2026-08-16",
+        checkedOn: "2026-08-17",
         productVersion: PRODUCT_VERSION,
         assetSpecs: ASSET_SPECS
       },
@@ -297,8 +297,8 @@ function automaticFixScene() {
       <div class="chart-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
       <div class="report-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     </div>
-    <div class="recovery-badge checking-badge" data-safe><span></span><div><strong>Assessing this page</strong><small>A result appears automatically</small></div></div>
-    ${popupMarkup("checking", "Checking this page…", "Please wait a moment.")}
+    <div class="recovery-badge checking-badge" data-safe><span></span><div><strong>Live status</strong><small>Updates automatically</small></div></div>
+    ${popupMarkup("checking", "Checking this report…", "This status updates automatically.")}
   </div>`;
 }
 
@@ -310,16 +310,16 @@ function simpleStatusScene() {
         <i></i><i></i><i></i>
         <div class="manual-context-lines"><b></b><b></b><b></b></div>
       </div>
-      <div class="manual-callout"><span>1</span><p><strong>Shown only when useful</strong>The button stays hidden while checking, working, or already fixed.</p></div>
-      <div class="manual-callout"><span>2</span><p><strong>One safe page refresh</strong>The result is shown before the supported page refreshes.</p></div>
+      <div class="manual-callout"><span>1</span><p><strong>Shown only when applicable</strong>The button stays hidden while working or once access is fixed.</p></div>
+      <div class="manual-callout"><span>2</span><p><strong>Bound to this page</strong>Only the active supported Report Center tab is refreshed.</p></div>
     </div>
-    ${popupMarkup("fix", "Fix not applied", "Use Fix this report, then open the Story again.", { showFix: true })}
+    ${popupMarkup("checking", "Checking SAP…", "This status updates automatically.", { showFix: true })}
   </div>`;
 }
 
 function supportScene() {
   return `<div class="support-scene" data-safe>
-    ${popupMarkup("fixed", "Fix applied", "The browser fix is active. Return to your report.")}
+    ${popupMarkup("fixed", "Access fix applied", "Browser access was prepared for this SAP site.")}
     <div class="link-bridge" aria-hidden="true"><i></i><i></i><i></i></div>
     <article class="kb-card" data-safe>
       <div class="kb-document"><span>?</span></div>
@@ -348,7 +348,7 @@ function popupMarkup(mode, title, detail, { showFix = false } = {}) {
   const fixAction = showFix
     ? `<div class="popup-fix-action">
         <div class="popup-button primary">Fix this report</div>
-        <p>Use this if the Story Report stays blank.</p>
+        <p>Use this only if the Story Report stays blank.</p>
       </div>`
     : "";
 
@@ -366,8 +366,8 @@ function popupMarkup(mode, title, detail, { showFix = false } = {}) {
 function smallPromoMarkup() {
   return `<main class="small-promo" data-asset-root>
     <div class="small-brand" data-safe><img src="${ICON_DATA_URL}" alt=""><div><strong>Story Reports</strong><span>Access Helper</span></div></div>
-    <h1 data-safe>Automatic help.<br>One clear fallback.</h1>
-    <div class="small-check" data-safe><span>✓</span> Guided browser access</div>
+    <h1 data-safe>Live status.<br>One safe fallback.</h1>
+    <div class="small-check" data-safe><span>✓</span> Automatic browser help</div>
   </main>`;
 }
 
@@ -375,13 +375,13 @@ function largePromoMarkup() {
   return `<main class="large-promo" data-asset-root>
     <section class="large-copy" data-safe>
       ${brandMarkup("brand-wide")}
-      <p class="eyebrow">AUTOMATIC AND GUIDED</p>
-      <h1>Open Story reports with one clear fallback.</h1>
-      <p>The helper checks the current page, works automatically, and offers one safe retry only when useful.</p>
+      <p class="eyebrow">IMMEDIATE AND AUTOMATIC</p>
+      <h1>Live status for Story reports, with one safe fallback.</h1>
+      <p>The helper opens immediately, updates in place, works automatically, and shows Fix this report only when useful.</p>
     </section>
     <section class="large-visual" data-safe>
       <div class="abstract-sheet"><i></i><i></i><i></i><div class="mini-chart"><b></b><b></b><b></b><b></b></div></div>
-      ${popupMarkup("fixed", "Fix applied", "The browser fix is active. Return to your report.")}
+      ${popupMarkup("fixed", "Access fix applied", "Browser access was prepared for this SAP site.")}
     </section>
   </main>`;
 }

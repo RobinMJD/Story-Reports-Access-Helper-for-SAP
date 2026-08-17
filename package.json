@@ -1,6 +1,6 @@
 {
   "name": "story-reports-access-helper-for-sap",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "description": "A narrowly scoped Microsoft Edge extension that automatically prepares browser access for supported SAP SuccessFactors Story Reports.",

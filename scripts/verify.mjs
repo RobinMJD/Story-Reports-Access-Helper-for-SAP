@@ -8,8 +8,8 @@ const packageJson = readJson("package.json");
 
 assert(manifest.manifest_version === 3, "manifest_version must be 3");
 assert(manifest.version === packageJson.version, "manifest and package versions must match");
-assert(manifest.version === "1.1.0", "the verified source must be v1.1.0");
-assert(manifest.version_name === "1.1.0", "the verified release label must be v1.1.0");
+assert(manifest.version === "1.1.1", "the verified source must be v1.1.1");
+assert(manifest.version_name === "1.1.1", "the verified release label must be v1.1.1");
 assert(manifest.incognito === "not_allowed", "incognito must be explicitly disabled");
 assert(
   JSON.stringify(manifest.permissions) === JSON.stringify(["storage", "alarms", "contentSettings"]),
@@ -107,6 +107,7 @@ const sfActivation = readFileSync(new URL("src/sf-activation.js", projectRoot), 
 const popup = readFileSync(new URL("src/popup.js", projectRoot), "utf8");
 const popupHtml = readFileSync(new URL("src/popup.html", projectRoot), "utf8");
 const popupCss = readFileSync(new URL("src/popup.css", projectRoot), "utf8");
+const edgeSmoke = readFileSync(new URL("scripts/smoke-edge.mjs", projectRoot), "utf8");
 const runtime = `${background}\n${core}\n${iasContent}\n${sfActivation}\n${popup}`;
 
 for (const legacy of [
@@ -153,8 +154,8 @@ assert(core.includes("secondaryPattern: `https://${sourceUrl.hostname}:443/*`"),
 assert(!/[`'"]https:\/\/\*\.(?:accounts|successfactors|sapsf|sapcloud|cloud\.sap)/.test(core), "cookie exceptions must never use wildcard parent domains");
 assert(!core.includes("<all_urls>"), "cookie exceptions must never use all-URL scope");
 
-assert(background.includes('const SF_ACTIVATION_BUILD = "1.1.0"'), "background activation build must be current");
-assert(sfActivation.includes('const BUILD = "1.1.0"'), "top-frame activation build must be current");
+assert(background.includes('const SF_ACTIVATION_BUILD = "1.1.1"'), "background activation build must be current");
+assert(sfActivation.includes('const BUILD = "1.1.1"'), "top-frame activation build must be current");
 assert(sfActivation.includes('const PROTOCOL = 1'), "top-frame activation protocol must be explicit");
 assert(!/\b(?:document|fetch|XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/.test(sfActivation), "activation marker must not inspect page data or use storage/network APIs");
 assert(background.includes("chrome.runtime.onInstalled.addListener"), "install recovery listener is required");
@@ -170,7 +171,19 @@ assert(background.includes("url: SF_ACTIVE_REPORT_CENTER_QUERY_PATTERNS"), "acti
 assert(background.includes("isSupportedReportCenterUrl(tab.url)"), "recovery must validate the exact Report Center path");
 assert(core.includes("export function isSupportedReportCenterUrl"), "core must validate supported Report Center routes centrally");
 assert(background.includes("chrome.windows.get(windowId)"), "recovery must verify actual window focus");
+assert(
+  background.includes('chrome.windows.getLastFocused({ windowTypes: ["normal"] })'),
+  "toolbar-popup status and manual recovery must preserve the last-focused normal Edge window"
+);
 assert(background.includes("state.activationAttempts.push(attempt)"), "recovery must persist a write-ahead tombstone");
+const safeTabStart = background.indexOf("function isSafeReportCenterTab");
+const safeTabEnd = background.indexOf("async function isFocusedNormalWindow", safeTabStart);
+const safeTabSource = background.slice(safeTabStart, safeTabEnd);
+assert(safeTabStart >= 0 && safeTabEnd > safeTabStart, "recovery must centralize safe Report Center tab validation");
+assert(
+  safeTabSource.includes('["loading", "complete"].includes(tab.status)'),
+  "safe Report Center recovery must accept both loading and complete top-level documents"
+);
 assert(background.includes("chrome.tabs.reload(tabId, { bypassCache: false })"), "recovery must use one normal reload");
 assert((background.match(/chrome\.tabs\.reload\s*\(/g) || []).length === 2, "automatic and manual recovery must be the only tab reload call sites");
 assert(
@@ -205,11 +218,29 @@ assert(
     background.includes("state.activationAttempts = [...remainingAttempts, attempt]"),
   "manual recovery may clear only stale activation records for the active tab"
 );
-assert(background.includes("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId)"), "manual reload must use the delayed claimed-tab path");
+assert(
+  background.includes("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId, currentTab.url)"),
+  "manual reload must bind the delayed claimed-tab path to the exact accepted URL"
+);
 assert(background.includes("async function performClaimedReportCenterReload"), "the delayed reload must revalidate its durable claim");
+assert(background.includes("tab.url !== expectedUrl"), "the delayed reload must reject same-tab navigation before its side effect");
 assert(background.includes("assessActiveAllowanceForTab"), "fixed status must assess the exact current browser rule");
 assert(background.includes('effective?.setting === "allow"'), "fixed status must require an effective allow rule");
 assert(background.includes('return "check-unavailable"'), "an unverifiable browser rule must fail closed in public status");
+const contextualStatusStart = background.indexOf("function contextualStatusCode");
+const contextualStatusEnd = background.indexOf("function canForceFixCurrentPage", contextualStatusStart);
+const contextualStatusSource = background.slice(contextualStatusStart, contextualStatusEnd);
+const replayEvidencePosition = contextualStatusSource.indexOf('recent?.outcome === "replay-scheduled"');
+const allowanceEvidencePosition = contextualStatusSource.indexOf("allowance.active");
+const loadingFallbackPosition = contextualStatusSource.indexOf('context.pageState === "loading"');
+assert(
+  contextualStatusStart >= 0 &&
+    contextualStatusEnd > contextualStatusStart &&
+    replayEvidencePosition >= 0 &&
+    allowanceEvidencePosition > replayEvidencePosition &&
+    loadingFallbackPosition > allowanceEvidencePosition,
+  "verified replay and effective allowance evidence must outrank transient tab loading"
+);
 
 assert(core.includes("export const RELIABLE_RULE_TTL_MS = 60 * 60 * 1000"), "allowance lifetime must have a hard 60-minute ceiling");
 assert(core.includes("export const MAX_RELIABLE_PAIRS = 20"), "the local allowance ledger must be capped at 20 pairs");
@@ -255,8 +286,35 @@ assert(
 assert(background.includes("handleReplayScheduleReady(message, sender)"), "the background must own the durable replay commit");
 assert(background.includes('appendRecentResult(state, workflow, "replay-scheduled")'), "the commit must persist a scheduled tombstone");
 assert(background.includes("isMatchingReplaySchedule"), "outer channel loss must reconcile against the exact scheduled attempt");
-assert(background.includes("documentId: claimed.sourceDocumentId"), "continuation must target the exact originating IAS document");
+assert(background.includes("function requestExactDocumentResume(workflow)"), "continuation must use the bounded exact-document transport");
+assert(background.includes("documentId: workflow.sourceDocumentId"), "continuation must target the exact originating IAS document");
+assert(background.includes("const DIRECT_RESUME_TIMEOUT_MS = 5_000"), "a stalled exact-document continuation must release startup recovery");
 assert(background.includes("const initializationPromise = initializeBackground()"), "cold-worker messages must have one startup barrier");
+const messageDispatchStart = background.indexOf("chrome.runtime.onMessage.addListener");
+const messageDispatchEnd = background.indexOf("chrome.tabs.onRemoved.addListener", messageDispatchStart);
+const messageDispatchSource = background.slice(messageDispatchStart, messageDispatchEnd);
+assert(
+  /message\?\.type === "get-status"[\s\S]{0,240}\? Promise\.resolve\(\)\.then\(\(\) => dispatchMessage\(message, sender\)\)/.test(
+    messageDispatchSource
+  ),
+  "trusted popup status must use a non-blocking cold-worker fast lane"
+);
+assert(
+  !/message\?\.type === "get-status"[\s\S]{0,240}\? startupRecoveryPromise/.test(messageDispatchSource),
+  "popup status must never wait behind startup recovery"
+);
+assert(background.includes("const POPUP_STATUS_TIMEOUT_MS = 750"), "background status snapshots must have a short deadline");
+assert(
+  /Promise\.race\(\[[\s\S]{0,200}getSingleFlightPublicStatusSnapshot\(\)[\s\S]{0,240}makeUnavailablePublicStatus\(\)/.test(background),
+  "slow browser APIs must degrade to a sanitized popup status instead of blocking the UI"
+);
+assert(background.includes("let publicStatusSnapshotPromise = null"), "live popup polling must share one in-flight browser status snapshot");
+assert(background.includes("const POPUP_STATUS_SNAPSHOT_STALE_MS = 2_000"), "a stalled popup snapshot must become replaceable");
+assert(background.includes("const MAX_PUBLIC_STATUS_SNAPSHOTS = 2"), "stalled popup browser calls must remain strictly capped");
+assert(
+  background.includes("publicStatusSnapshotsInFlight.size >= MAX_PUBLIC_STATUS_SNAPSHOTS"),
+  "popup status recovery must not accumulate uncancellable browser API calls"
+);
 assert(
   /initializationPromise\s*\.then\(\(\) => dispatchMessage\(message, sender\)\)/s.test(background),
   "new detections must wait for startup reconciliation before claiming a workflow"
@@ -267,6 +325,10 @@ assert(!runtime.includes(legacyReplayCode), "runtime and popup source must not c
 
 assert(iasContent.includes("if (window.top === window) return;"), "top-level IAS pages must remain untouched");
 assert(iasContent.includes('message?.type === "resume-with-cookie-exception"'), "only exact-pair continuation may request replay");
+assert(iasContent.includes("new MutationObserver(scheduleInterstitialChecks)"), "slow IAS insertion must remain mutation-driven");
+assert(!iasContent.includes("OBSERVER_TIMEOUT_MS"), "IAS detection must not stop after a fixed observer timeout");
+assert(!iasContent.includes("10_000"), "IAS detection must not retain the historical 10-second cutoff");
+assert(iasContent.includes("observer.disconnect()"), "IAS observation must stop after the exact interstitial is reported");
 assert(!iasContent.includes("document.requestStorageAccess("), "automatic mode must not invoke an interactive Storage Access prompt");
 assert(iasContent.includes("if (resumeAttempted)"), "a document-local guard must prevent repeat continuation");
 assert((iasContent.match(/HTMLFormElement\.prototype\.submit\.call\(/g) || []).length === 1, "exactly one reviewed native form-submit call site is allowed");
@@ -296,7 +358,11 @@ assert(!/\b(?:IAS|contentSettings|cookie|origin|replay|durable|reliable mode|rec
 assert(!/chrome\.permissions\.(?:request|remove)\s*\(/.test(popup), "required automatic mode must not expose a runtime permission setup flow");
 assert(!/\b(?:pause|resume)\b/i.test(popupHtml), "the popup must not expose removed Pause or Resume controls");
 assert((popupHtml.match(/<button\b/g) || []).length === 2, "the popup must contain only the manual fix and SAP help actions");
-assert(popupHtml.includes('id="status-title">Checking this page…'), "the popup must begin with a visible checking state");
+assert(popupHtml.includes('id="status-title">Checking this report…'), "the popup must begin with a visible checking state");
+assert(
+  popupHtml.includes('id="status-detail">This status updates automatically.'),
+  "the static popup must explain that status updates in place before JavaScript runs"
+);
 assert(popupHtml.includes('id="status-card"') && popupHtml.includes('aria-busy="true"'), "the initial status must be marked busy");
 assert(popupHtml.includes('id="fix-action" hidden'), "the manual action must start hidden until the page check completes");
 assert(/\.status-dot\.checking\s*\{[^}]*animation:/s.test(popupCss), "the checking state must have a visible animation");
@@ -306,8 +372,8 @@ assert(popupHtml.includes("Fix this report"), "the manual fix action must use pl
 assert(popupHtml.includes('id="sap-help"'), "the popup must expose one clearly identified SAP help action");
 assert(popupHtml.includes("Open SAP help article"), "the SAP help action must use plain end-user wording");
 assert(popupHtml.includes("No report data sent"), "the popup must state its local data boundary in plain language");
-assert(popup.includes('fixed: ["Fix applied"'), "the popup must distinguish a completed fix from readiness");
-assert(popup.includes('idle: ["No fix applied yet"'), "the popup must say clearly when no fix has been applied");
+assert(popup.includes('fixed: ["Access fix applied"'), "the popup must distinguish a completed access fix from readiness");
+assert(popup.includes('idle: ["Extension ready"'), "the popup must present a calm ready state when no action is needed");
 assert(
   popup.includes('if (code === "replay-scheduled" || code === "fix-already-applied") return "fixed"'),
   "only a durable replay or verified active fix may be presented as Fix applied"
@@ -317,8 +383,17 @@ assert(
   "the manual action must delegate one exact force-fix request to the service worker"
 );
 assert(popup.includes("status.canFixCurrentPage"), "the popup must gate the manual action on the current-page capability");
-assert(popup.includes('if (state === "unavailable") return true'), "the manual fallback must remain available when status checking is unavailable");
+assert(popup.includes('return state === "unavailable"'), "the manual fallback must remain available when status checking is unavailable");
 assert(popup.includes("setFixVisibility(shouldShowFix(status))"), "known runtime states must explicitly show or hide the manual action");
+assert(popup.includes("const STATUS_REQUEST_TIMEOUT_MS = 1_000"), "each popup status request must have a short deadline");
+assert(popup.includes("const STATUS_POLL_INTERVAL_MS = 500"), "an open popup must refresh its status automatically");
+assert(popup.includes("const STATUS_RETRY_INTERVAL_MS = 250"), "temporary status failures must retry promptly");
+assert(popup.includes("async function pollPopupStatus"), "the popup must own a live self-refresh loop");
+assert(popup.includes("statusPollInFlight"), "the popup must prevent overlapping status requests");
+assert(popup.includes("renderGeneration"), "late popup responses must not overwrite a newer result");
+assert(!/setInterval\s*\(/.test(popup), "popup refresh must use bounded chained timers rather than a permanent interval");
+assert(!/reopen this window/i.test(popup), "the popup must never ask the user to close and reopen it for fresh status");
+assert(!/\bpopup\.reload\s*\(/.test(edgeSmoke), "Edge smoke must prove live popup transitions without reloading the popup");
 assert(
   popup.includes('const SAP_KB_URL = "https://userapps.support.sap.com/sap/support/knowledge/en/3039244"'),
   "the popup must pin the exact public SAP KBA 3039244 URL"

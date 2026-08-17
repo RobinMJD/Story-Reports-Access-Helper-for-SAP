@@ -15,7 +15,7 @@ body:
     attributes:
       label: Extension version
       description: Copy the version displayed at the bottom of the popup.
-      placeholder: 1.1.0
+      placeholder: 1.1.1
     validations:
       required: true
   - type: input
@@ -51,7 +51,29 @@ body:
     attributes:
       label: Exact popup status
       description: Use only the short extension status. Do not paste browser-console or SAP page content.
-      placeholder: No fix applied yet
+      placeholder: Extension ready
+    validations:
+      required: true
+  - type: dropdown
+    id: popup_opened_promptly
+    attributes:
+      label: Did the popup appear promptly with Checking this report?
+      options:
+        - "Yes"
+        - "No, the extension button appeared stuck before the popup opened"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: popup_updated_live
+    attributes:
+      label: Did the status update while the same popup stayed open?
+      description: Do not close and reopen the popup for this check.
+      options:
+        - "Yes"
+        - "No"
+        - "The popup closed because the page refreshed"
+        - "Not applicable or not sure"
     validations:
       required: true
   - type: input
@@ -59,7 +81,7 @@ body:
     attributes:
       label: Fix this report result
       description: State whether the button appeared and copy only the short result shown after selecting it. Do not include page or console content.
-      placeholder: Button appeared; Refresh started
+      placeholder: Button appeared; Preparing this report
   - type: input
     id: sap_family
     attributes:
