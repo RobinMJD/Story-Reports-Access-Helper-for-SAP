@@ -1,12 +1,50 @@
 # Validation Record
 
-Target release: **v1.0.0 for Microsoft Edge Add-ons**
+Target candidate: **v1.1.0 for Microsoft Edge Add-ons**
 
-Date: 2026-08-16
+Candidate date: 2026-08-17
 
-This record separates the user-accepted v0.3.1 browser fix from the final v1.0.0 release package. GitHub publication, Partner Center submission, certification, and public Microsoft Edge Add-ons availability are separate states and are recorded independently below.
+This record separates the current v1.1.0 candidate from the historical user-accepted v0.3.1 browser fix and the historical v1.0.0 GitHub/Partner Center submission. GitHub publication, Partner Center submission, certification, and public Microsoft Edge Add-ons availability are separate states.
 
-## Confirmed Live Acceptance Of The Core Fix
+## v1.1.0 Candidate State
+
+Version 1.1.0 is currently a local release candidate. It is **not recorded here as tagged, published to GitHub Releases, submitted to Microsoft, certified, or live in Microsoft Edge Add-ons**.
+
+The candidate addresses a v1.0.0 lifecycle gap reported after the Store submission: an already-open Report Center page could miss the static content script, installation did not always refresh that page, and the popup's global ready state did not prove whether the active tab had received the fix.
+
+Candidate scope:
+
+- evaluate the exact active Report Center path after installation, on a same-build service-worker start including re-enablement, on tab activation, and on `tabs.onUpdated` URL-change or page-completion events;
+- store one trusted-local marker containing only the current extension build/version so a same-build startup scan can be distinguished from a version transition;
+- skip the immediate generic startup scan on a version transition so an older exact-document continuation is not disrupted;
+- retain one durable, cache-preserving automatic refresh boundary for an eligible active page with a missing current-build marker;
+- replace the global ready state with a contextual popup check, animated waiting state, and clear not-applied, working, prepared, applied, and stopped results;
+- show **Fix this report** only when the page can be retried, except for a safe fallback when the availability check cannot complete;
+- independently revalidate every manual request, refuse in-flight work or an attempt inside the 30-second guard, return the accepted/refused result for display, and then perform at most one cache-preserving refresh;
+- never clear browser cookies, the exact-pair allowance ledger, or unrelated browser settings; and
+- keep **Open SAP help article** fixed to `https://userapps.support.sap.com/sap/support/knowledge/en/3039244` without appended data.
+
+For this candidate, **Fix applied** means either that the exact extension-owned browser setting is currently verified as effective for the active SuccessFactors site or that the extension durably recorded the local one-use continuation step for that tab. It is not evidence of network delivery, SAP authentication, authorization, or Story rendering.
+
+### v1.1.0 Candidate Evidence
+
+- Source commit: **PENDING — fill with the reviewed full commit SHA**
+- Source verifier: **PASS**
+- Full automated suite: **PASS — 118/118 tests with Node.js 24.19.0**
+- ZIP: `release/story-reports-access-helper-for-sap-v1.1.0-microsoft-edge-addons.zip`
+- ZIP byte size: `115,542 bytes`
+- ZIP member count: `12`
+- ZIP SHA-256: `52b44b251fc557dcfc7e360fa1788923b197efb44b1076512ba8fd853e4a56e1`
+- Exact-ZIP loaded Microsoft Edge acceptance: **PASS — all six smoke phases with Microsoft Edge 151.0.4129.86 on macOS 26.5.2 arm64**
+- Live supported-SAP acceptance of automatic and manual paths: **PENDING**
+- Annotated tag `v1.1.0`: **PENDING — do not create until exact acceptance is complete**
+- GitHub Release URL and workflow run: **PENDING — not published**
+- Microsoft Edge Add-ons v1.1.0 state: **PENDING — not submitted**
+- Public Store version verification: **PENDING — do not mark live until the public listing offers v1.1.0**
+
+The exact local ZIP, checksum, and loaded-Edge smoke result above are finalized candidate evidence. Source identity, live SAP acceptance, tag, GitHub Release, workflow, Partner Center submission, and public Store verification remain pending until each stage has actually completed. Passing local tests does not fill a live-SAP or publication field.
+
+## Historical Confirmed Live Acceptance Of The Core Fix
 
 The user completed a live Microsoft Edge acceptance test with v0.3.1:
 
@@ -43,9 +81,9 @@ Historical v0.3.1 local artifact (superseded and never intended for the v1 Edge 
 - Members: `12`
 - SHA-256: `7db2c31a348a417ddc95574a9c3c3cb07117531bf38909c46dc4e77d91387f20`
 
-This historical artifact is superseded and must not be submitted as v1.0.0.
+This historical artifact is superseded and must not be used for a Store submission.
 
-## v1.0.0 Release Scope
+## Historical v1.0.0 Release Scope
 
 Version 1.0.0 preserves the accepted automatic fix while presenting a production end-user experience:
 
@@ -65,7 +103,7 @@ The SAP help action must open exactly:
 
 It must not append a tenant, account, report, query, fragment, or extension-state value.
 
-## v1.0.0 Source Validation
+## Historical v1.0.0 Source Validation
 
 The final v1.0.0 source verifier passed the Manifest V3 contract, synchronized version, exact required permissions, reviewed SAP website families, exact Report Center scope, exact IAS-primary/SuccessFactors-secondary rule construction, protected bounded ledger, hard expiry, one-refresh recovery, at-most-once continuation, legacy-control deletion, compact popup, fixed SAP KBA action, prohibited-API checks, and JavaScript syntax checks.
 
@@ -73,7 +111,7 @@ All **100/100** executable tests passed with Node.js 24.19.0. The suite covers r
 
 The same final **100/100** suite passed in **20 consecutive runs** after the exact-ZIP smoke, providing repeatability evidence for the lifecycle and race-sensitive coverage.
 
-## v1.0.0 Exact Artifact
+## Historical v1.0.0 Exact Artifact
 
 - File: `release/story-reports-access-helper-for-sap-v1.0.0-microsoft-edge-addons.zip`
 - Size: `94,258 bytes`
@@ -84,7 +122,7 @@ The same final **100/100** suite passed in **20 consecutive runs** after the exa
 
 `scripts/verify-edge-package.mjs` verified the archive root, exact package members, packaged manifest/version, byte-for-byte source correspondence, prohibited-file exclusions, and `release/SHA256SUMS.txt`.
 
-## v1.0.0 Exact-ZIP Microsoft Edge Acceptance
+## Historical v1.0.0 Exact-ZIP Microsoft Edge Acceptance
 
 The exact ZIP identified above passed the loaded-browser smoke on Microsoft Edge `151.0.4129.86` for macOS arm64.
 
@@ -104,7 +142,7 @@ This verifies the packaged browser mechanics in the tested Edge/platform combina
 
 The exact v1.0.0 ZIP is the production artifact used by the public GitHub Release and Microsoft Partner Center submission recorded below. A submitted item in review is not a certified or live Microsoft Edge Add-ons listing.
 
-## GitHub Publication Evidence
+## Historical v1.0.0 GitHub Publication Evidence
 
 - Public repository: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP`
 - Release: `https://github.com/RobinMJD/Story-Reports-Access-Helper-for-SAP/releases/tag/v1.0.0`
@@ -116,7 +154,7 @@ The exact v1.0.0 ZIP is the production artifact used by the public GitHub Releas
 - Active repository rulesets require pull requests and the `verify` CI check for `main`, and prevent deletion or non-fast-forward updates of `v*` release tags.
 - GitHub private vulnerability reporting is enabled.
 
-## Microsoft Edge Add-ons Submission Evidence
+## Historical v1.0.0 Microsoft Edge Add-ons Submission Evidence
 
 Submitted through Microsoft Partner Center on **2026-08-16 at approximately 18:16 UTC**.
 
@@ -125,7 +163,7 @@ Submitted through Microsoft Partner Center on **2026-08-16 at approximately 18:1
 - Product ID: `7388eb01-8627-440f-aaf6-3ca300362ff9`
 - Store ID: `0RDCKFT1CDT4`
 - CRX ID: `bcmdpclnmpflaollgfjamioigkbpdmdc`
-- Current Partner Center state: **In review**
+- Partner Center state recorded on 2026-08-16: **In review**
 - Visibility: **Public**
 - Category: **Productivity**
 - Language: **English (United States)**
@@ -136,9 +174,9 @@ Partner Center verified the exact ZIP identified above and displayed version `1.
 
 The submitted listing includes the original 300 x 300 logo, both promotional tiles, four synthetic 1280 x 800 screenshots, the public repository and privacy URLs, conservative website-content data-use disclosure, and certification notes that contain no credentials, customer data, tenant details, reports, cookies, or authentication payloads.
 
-Partner Center states that Microsoft is reviewing the submission and expects to respond within seven business days. **In review is not live.** Live availability must be verified only after the public Store URL offers version 1.0.0.
+At submission time, Partner Center stated that Microsoft was reviewing the submission and expected to respond within seven business days. **In review was not live.** No later v1.0.0 certification or public-availability result is asserted by this historical record.
 
-## Required v1.0.0 Verification
+## Historical v1.0.0 Verification Scope
 
 - Manifest V3 contract and version alignment across all version consumers.
 - Exact required permissions: `storage`, `alarms`, and `contentSettings` only.
@@ -155,16 +193,18 @@ Partner Center states that Microsoft is reviewing the submission and expects to 
 - Exact package members and bytes match reviewed source; checksum file is consistent.
 - Loaded Microsoft Edge acceptance uses the exact final ZIP, not an unpackaged source folder.
 
-## Publication Gates
+## v1.1.0 Candidate Publication Gates
 
-- Create the public repository and commit the reviewed source without ignored local QA or historical release artifacts.
-- Create the annotated `v1.0.0` tag on the reviewed public commit and confirm that the tag resolves to that commit.
+- Commit the reviewed v1.1.0 source without ignored local QA or historical release artifacts.
+- Complete the current [production acceptance plan](PILOT_TEST.md) against the exact checksum-verified v1.1.0 ZIP, including installation, same-build re-enable/startup, tab activation, URL-change/page-completion, contextual popup, manual result-before-refresh, 30-second repeat guard, and live Story outcomes.
+- Fill every pending v1.1.0 evidence field above before tagging or uploading.
+- Create the annotated `v1.1.0` tag on the reviewed public commit and confirm that the tag resolves to that commit.
 - Confirm the public repository contains no customer or employer names, branding, tenant URLs, accounts, report data, HR data, HAR files, screenshots, or secrets.
 - Confirm all `RobinMJD/Story-Reports-Access-Helper-for-SAP` support, privacy, security, and Issues URLs resolve publicly.
 - Verify every Store asset is original fictional artwork with the documented dimensions.
 - Complete Partner Center publisher/trader, permission, privacy, remote-code, availability, listing, and certification fields.
-- Publish the immutable GitHub Release from that tag and verify that its ZIP/checksum match the values above.
-- Submit those exact verified bytes to Microsoft Edge Add-ons only after the immutable public commit/tag/Release are established.
-- Record Partner Center submission and certification as non-live states until the public Microsoft Edge Add-ons listing offers v1.0.0.
+- Publish the immutable GitHub Release from that tag and verify that its ZIP/checksum match the filled v1.1.0 values above.
+- Submit those exact verified v1.1.0 bytes to the existing Microsoft Edge Add-ons product only after the immutable public commit/tag/Release are established and an update is explicitly authorized.
+- Record Partner Center submission and certification as non-live states until the public Microsoft Edge Add-ons listing offers v1.1.0.
 
 Customer-configured IAS custom domains remain unsupported in this public build. Supporting them safely requires a separately validated exact allowlist or enterprise policy; broad website access and console/debugger-based hostname trust are deliberately excluded.

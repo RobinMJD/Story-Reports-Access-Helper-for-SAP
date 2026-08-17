@@ -9,21 +9,25 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
-  width: 332px;
+  width: 392px;
   margin: 0;
   background: linear-gradient(160deg, #f8fbff 0%, #eef4fa 100%);
 }
 
 main {
-  padding: 16px;
+  padding: 18px;
 }
 
 header {
   display: flex;
   align-items: center;
   gap: 11px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 header img {
@@ -32,7 +36,7 @@ header img {
 
 h1 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.25;
 }
 
@@ -50,22 +54,22 @@ p {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
   gap: 10px;
-  min-height: 76px;
-  padding: 13px;
+  min-height: 88px;
+  padding: 15px;
   border: 1px solid #c7d8ea;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.84);
 }
 
 .status-card strong {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.3;
 }
 
 .status-card p {
   margin-top: 4px;
   color: #526174;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -83,6 +87,12 @@ p {
   box-shadow: 0 0 0 3px rgba(10, 110, 209, 0.15);
 }
 
+.status-dot.checking {
+  background: #0a6ed1;
+  box-shadow: 0 0 0 3px rgba(10, 110, 209, 0.15);
+  animation: status-pulse 1.25s ease-in-out infinite;
+}
+
 .status-dot.success {
   background: #18864b;
   box-shadow: 0 0 0 3px rgba(24, 134, 75, 0.15);
@@ -93,18 +103,21 @@ p {
   box-shadow: 0 0 0 3px rgba(181, 106, 0, 0.15);
 }
 
+.actions {
+  margin-top: 14px;
+}
+
 button {
   width: 100%;
   min-height: 44px;
-  margin-top: 12px;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border: 1px solid #075cae;
   border-radius: 8px;
   background: #0a6ed1;
   color: #fff;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -116,6 +129,40 @@ button:hover {
 button:focus-visible {
   outline: 3px solid rgba(10, 110, 209, 0.28);
   outline-offset: 2px;
+}
+
+button:disabled {
+  border-color: #c2ccd8;
+  background: #e4eaf1;
+  color: #6f7b89;
+  cursor: not-allowed;
+}
+
+.action-guidance {
+  min-height: 18px;
+  margin: 6px 2px 0;
+  color: #526174;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.secondary-action {
+  border-color: #92a5b9;
+  background: rgba(255, 255, 255, 0.72);
+  color: #134f86;
+}
+
+#fix-action + .secondary-action {
+  margin-top: 10px;
+}
+
+#fix-action[hidden] + .secondary-action {
+  margin-top: 0;
+}
+
+.secondary-action:hover {
+  border-color: #4c769e;
+  background: #fff;
 }
 
 footer {
@@ -139,6 +186,24 @@ footer span:last-child {
   flex: 0 0 auto;
 }
 
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 0.58;
+    transform: scale(0.82);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.checking {
+    animation: none;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     background: #15202b;
@@ -151,6 +216,7 @@ footer span:last-child {
 
   .subtitle,
   .status-card p,
+  .action-guidance,
   footer {
     color: #b8c5d4;
   }
@@ -169,6 +235,23 @@ footer span:last-child {
   button:hover {
     border-color: #9acbf8;
     background: #0a6ed1;
+  }
+
+  button:disabled {
+    border-color: #415164;
+    background: #2b3948;
+    color: #9caabb;
+  }
+
+  .secondary-action {
+    border-color: #607890;
+    background: rgba(25, 41, 56, 0.82);
+    color: #dcecff;
+  }
+
+  .secondary-action:hover {
+    border-color: #8fb5d8;
+    background: #25384a;
   }
 
   footer {

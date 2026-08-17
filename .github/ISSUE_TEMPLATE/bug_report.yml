@@ -15,7 +15,7 @@ body:
     attributes:
       label: Extension version
       description: Copy the version displayed at the bottom of the popup.
-      placeholder: 1.0.0
+      placeholder: 1.1.0
     validations:
       required: true
   - type: input
@@ -28,7 +28,7 @@ body:
   - type: dropdown
     id: preexisting_page
     attributes:
-      label: Was the Story page open before installation or re-enablement?
+      label: Was Report Center open before installation or re-enablement?
       options:
         - "Yes"
         - "No"
@@ -38,7 +38,7 @@ body:
   - type: dropdown
     id: refresh
     attributes:
-      label: Did the extension automatically refresh that active Story page?
+      label: Did the extension automatically refresh that active Report Center page?
       options:
         - "Yes, once"
         - "No"
@@ -51,9 +51,15 @@ body:
     attributes:
       label: Exact popup status
       description: Use only the short extension status. Do not paste browser-console or SAP page content.
-      placeholder: Ready
+      placeholder: No fix applied yet
     validations:
       required: true
+  - type: input
+    id: manual_fix_result
+    attributes:
+      label: Fix this report result
+      description: State whether the button appeared and copy only the short result shown after selecting it. Do not include page or console content.
+      placeholder: Button appeared; Refresh started
   - type: input
     id: sap_family
     attributes:

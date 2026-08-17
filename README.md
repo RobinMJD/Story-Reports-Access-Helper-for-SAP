@@ -8,7 +8,7 @@ Story Reports Access Helper prepares the narrow browser-storage access required 
   <a href="https://microsoftedge.microsoft.com/addons/detail/bcmdpclnmpflaollgfjamioigkbpdmdc"><img src="docs/images/store-badges/microsoft-edge-addons.png" alt="Get it from Microsoft Edge" height="58"></a>
 </p>
 
-Current version: **v1.0.0**
+Current source version: **v1.1.0**
 
 [![Story Reports Access Helper for SAP](docs/images/large-promo-1400x560.png)](docs/images/large-promo-1400x560.png)
 
@@ -19,9 +19,10 @@ Some SAP SuccessFactors Story Reports can remain blank when Microsoft Edge preve
 Story Reports Access Helper handles the compatible browser step automatically:
 
 - **No setup:** install it once and open Story Reports normally.
-- **Automatic recovery:** if the Story page was already open before installation, the extension refreshes that exact active page once.
+- **Automatic recovery:** if Report Center was already open before installation or re-enablement, the extension prepares that exact active page with one normal refresh.
+- **Manual fallback:** if SAP still stays blank, select **Fix this report** for one safe refresh of the active Report Center page.
 - **Instance-aware:** the matching SAP Identity and SuccessFactors origins are derived from the live SAP frame context; no customer hostname is hardcoded.
-- **Simple status:** the popup says whether the helper is ready, preparing access, finished, or needs another attempt.
+- **Clear status:** the popup says whether no fix has been needed yet, the extension is working, the SAP page is prepared, or the browser fix was applied.
 - **Built-in help:** one button opens the public preview of SAP KBA 3039244 in a new tab.
 - **Local-first:** there is no telemetry, advertising, remote code, developer backend, or report-data collection.
 
@@ -30,7 +31,8 @@ Story Reports Access Helper handles the compatible browser step automatically:
 1. Install Story Reports Access Helper from Microsoft Edge Add-ons.
 2. Open SAP SuccessFactors and select a Story Report as usual.
 3. If the browser-storage issue is present, wait a few seconds while the extension prepares access.
-4. If the popup says **Try the report again**, open that Story once more. Use **Open SAP help article** for SAP's related troubleshooting guidance.
+4. If the Story stays blank, open the extension and select **Fix this report**, then open the Story again.
+5. Use **Open SAP help article** for SAP's related troubleshooting guidance.
 
 That is the complete end-user setup. The extension never asks for a tenant, company, account, password, MFA code, or report identifier.
 
@@ -46,7 +48,11 @@ For an eligible SAP flow, the extension:
 
 Microsoft Edge or enterprise policy can still prevent the setting from becoming effective. Expired SAP authentication, stricter tracking protection, missing authorization, and SAP-side changes remain authoritative. The extension stops rather than broadening access or entering a retry loop.
 
-If an exact Story execution page predates installation or re-enablement, Microsoft Edge cannot retroactively add the extension's static content script to that existing document. The helper detects the missing current-build marker when that tab is active and performs one ordinary, cache-preserving refresh. It never refreshes an unrelated or background tab and never retries that refresh.
+If Report Center predates installation or re-enablement, Microsoft Edge cannot retroactively add the extension's static content script to that existing document. The helper checks the active supported Report Center tab after installation, on a same-build service-worker start (including re-enablement), when the tab is activated, and when Microsoft Edge reports a matching URL change or page-load completion. If its current-build marker is absent, it performs one ordinary, cache-preserving refresh. It never refreshes an unrelated or background tab and never loops that automatic refresh.
+
+The popup checks the current page when it opens. Its **Fix this report** action appears only when the current result can be retried, except that it remains available as a safe fallback if the availability check itself cannot complete. The service worker always revalidates the active supported Report Center page, refuses to interrupt an in-progress continuation, records the attempt before one normal refresh, shows the result before that refresh begins, and never clears browser cookies. A 30-second repeat guard prevents rapid repeated refreshes.
+
+**Fix applied** means either that the exact temporary browser setting is currently verified as effective for this SuccessFactors site or that the extension durably recorded the local one-use continuation step for this tab. It does not mean that SAP authentication, authorization, network delivery, or Story rendering succeeded.
 
 ## Privacy And Security
 
@@ -55,7 +61,7 @@ The extension never reads cookie values, SAP form values, credentials, authentic
 - Required browser permissions are limited to `storage`, `alarms`, and `contentSettings`.
 - Required website access is limited to reviewed standard SAP Identity Authentication and SuccessFactors host families.
 - `contentSettings` is used only for exact, temporary IAS-in-SuccessFactors cookie allowances.
-- The SuccessFactors page marker is DOM-free and contains only the extension build/protocol version.
+- The SuccessFactors page marker is DOM-free and contains only the extension build/protocol version. A separate trusted-local marker stores only the current extension build so a same-build worker start can be distinguished from a version transition.
 - Bounded local/session state contains browser identifiers, validated origins, timestamps, status codes, and opaque attempt identifiers only.
 - Incognito/InPrivate execution is disabled.
 
@@ -95,7 +101,7 @@ Click an image to view it at full size.
 | Automatic recovery | Clear status |
 | --- | --- |
 | [![An already-open Story Report is refreshed once so the extension can prepare access](docs/images/screenshot-01-automatic-fix-1280x800.png)](docs/images/screenshot-01-automatic-fix-1280x800.png) | [![The compact popup gives Story Report users a simple readiness status](docs/images/screenshot-02-simple-status-1280x800.png)](docs/images/screenshot-02-simple-status-1280x800.png) |
-| A Story page that predates installation is refreshed once when active. | Users see one short status and no technical configuration. |
+| An active Report Center page that predates installation is refreshed once. | Users see whether the browser fix has run, plus one manual fallback. |
 
 | SAP guidance | Local-first design |
 | --- | --- |

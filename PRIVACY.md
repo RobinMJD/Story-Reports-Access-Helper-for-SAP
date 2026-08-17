@@ -1,12 +1,12 @@
 # Privacy Policy
 
-Effective date: August 16, 2026
+Effective date: August 17, 2026
 
 Story Reports Access Helper for SAP is a local-first Microsoft Edge extension. It does not sell user data or send extension data to the developer. It has no analytics, advertising, remote configuration, remotely hosted code, or developer-operated backend.
 
 ## What The Extension Processes Locally
 
-On a matching SAP SuccessFactors Report Center page, the extension processes the current tab address to verify a supported hostname, the exact Report Center path, and the Story execution route. A tiny DOM-free script answers whether the current extension build is present. It exchanges only the extension build and protocol version with the local extension service worker; it does not inspect the SuccessFactors page DOM, title, report list, report name, report identifier, report contents, or employee data.
+On a matching SAP SuccessFactors Report Center page, the extension processes the current tab address to verify a supported hostname and the exact Report Center path. A tiny DOM-free script answers whether the current extension build is present. It exchanges only the extension build and protocol version with the local extension service worker; it does not inspect the SuccessFactors page DOM, title, report list, report name, report identifier, report contents, or employee data.
 
 Inside a matching SAP Identity Authentication page, the extension checks:
 
@@ -19,9 +19,11 @@ The extension never reads form values, cookie values, passwords, MFA codes, cred
 
 ## Existing-Page Installation Recovery
 
-Microsoft Edge does not retroactively inject a newly installed or re-enabled static content script into a document that was already open. For an active, completed, non-private tab on the exact supported Story execution route, the extension checks whether its current-build marker is present. If the marker is absent, it validates the tab again, records one attempt, and performs one ordinary refresh with normal cache behavior.
+Microsoft Edge does not retroactively inject a newly installed or re-enabled static content script into a document that was already open. For an active, completed, non-private tab on the exact supported Report Center path, the extension checks whether its current-build marker is present. It performs this bounded check after installation, on a same-build service-worker start (including re-enablement), on tab activation, and when Microsoft Edge reports a matching URL change or page-load completion. If the marker is absent, it validates the tab again, records one attempt, and performs one ordinary refresh with normal cache behavior.
 
-The extension never focuses, opens, closes, or refreshes an unrelated or background tab, and it never retries that refresh. Its session-only recovery record contains a tab identifier, extension version, state, and timestamp. It does not contain a URL, title, report identifier, or page content.
+The extension never focuses, opens, closes, or refreshes an unrelated or background tab, and it never loops that automatic refresh. Its session-only recovery record contains a tab identifier, extension version, state, and timestamp. It does not contain a URL, title, report identifier, or page content.
+
+The popup checks the current page when it opens. Its **Fix this report** action is an explicit fallback for the same active supported Report Center page. The service worker independently revalidates the page, refuses an in-progress continuation or a repeat within the 30-second guard, commits one bounded attempt, returns a plain result for display, and then performs one normal refresh. It does not clear browser cookies or unrelated settings. The popup receives only a plain status and capability result; it never receives the tab address, SAP origins, browser identifiers, report details, or authentication data. If the availability check itself cannot complete, the popup may show the fallback action, but the service worker still fails closed unless its own checks succeed.
 
 ## Temporary Exact-Pair Browser Access
 
@@ -42,6 +44,8 @@ After the exact allowance is verified, the extension can continue the same alrea
 
 The recorded state proves only that one continuation was authorized. It does not prove network delivery, authentication success, or Story rendering. If the browser setting is ineffective, enterprise policy blocks it, the source document changes, or the durable barrier cannot be completed, the extension stops without retrying or broadening access.
 
+The popup status **Fix applied** means either that an exact extension-owned browser setting is currently verified as effective for the active SuccessFactors site or that the extension durably recorded the local one-use continuation step for that tab. It does not mean that SAP authentication, authorization, network delivery, or Story rendering succeeded.
+
 ## Local Storage And Retention
 
 `chrome.storage.session` contains bounded workflow metadata only:
@@ -53,11 +57,14 @@ The recorded state proves only that one continuation was authorized. It does not
 
 Workflow and recent-result records expire after ten minutes. A terminal one-refresh record lasts only for the browser session so the same tab is not automatically refreshed twice; it is removed when the tab closes. Session records clear with the browser session.
 
-`chrome.storage.local`, restricted to trusted extension contexts, contains a bounded cleanup ledger with at most twenty entries:
+`chrome.storage.local`, restricted to trusted extension contexts, contains:
 
-- validated IAS and SuccessFactors origins;
-- their derived exact HTTPS `:443` content-setting patterns; and
-- creation and expiry timestamps.
+- one current-build marker containing only the extension build/version, used to distinguish a same-build service-worker start from a version transition; and
+- a bounded cleanup ledger with at most twenty entries containing:
+
+  - validated IAS and SuccessFactors origins;
+  - their derived exact HTTPS `:443` content-setting patterns; and
+  - creation and expiry timestamps.
 
 It contains no cookie values, form values, account identifiers, report data, or authentication payloads. Expired entries and their extension-owned browser rules are removed automatically. The browser provides its standard extension-management controls; the extension has no user profile, cloud account, or developer-held copy of local data.
 

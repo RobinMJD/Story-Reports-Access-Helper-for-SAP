@@ -24,12 +24,14 @@ let profile;
 let edge;
 let recoveryProfile;
 let recoveryEdge;
+let manualProfile;
+let manualEdge;
 
 try {
   assertSmokeArchitecture(extension.root);
   fixture = await startFixtureServer();
 
-  recoveryProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v100-recovery-"));
+  recoveryProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-recovery-"));
   configureBlockedCookieProfile(recoveryProfile);
   recoveryEdge = await launchEdge(recoveryProfile);
   await runPreExistingStoryRecoveryAfterExtensionReload(recoveryEdge);
@@ -38,15 +40,27 @@ try {
   recoveryEdge = null;
   rmSync(recoveryProfile, { recursive: true, force: true });
   recoveryProfile = null;
-  console.log("PASS: a Story opened before extension reload was recovered by one ordinary route-preserving reload and one IAS POST.");
+  console.log("PASS: a pre-existing Report Center home page was recovered at worker start with one route-preserving reload.");
 
   fixture.reset();
-  profile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v100-"));
+  manualProfile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-manual-"));
+  configureBlockedCookieProfile(manualProfile);
+  manualEdge = await launchEdge(manualProfile);
+  await runManualFixOnCurrentReportCenter(manualEdge);
+  assert.deepEqual(manualEdge.runtimeErrors, [], formatRuntimeErrors(manualEdge.runtimeErrors));
+  await manualEdge.context.close();
+  manualEdge = null;
+  rmSync(manualProfile, { recursive: true, force: true });
+  manualProfile = null;
+  console.log("PASS: Fix this report performed one bounded ordinary reload and rejected an immediate duplicate.");
+
+  fixture.reset();
+  profile = mkdtempSync(join(tmpdir(), "sap-story-helper-edge-v101-"));
   configureBlockedCookieProfile(profile);
 
   edge = await launchEdge(profile);
   await runCompactPopupStates(edge);
-  console.log("PASS: required-permission popup is compact and renders Ready, working, and prepared copy without a permission gate.");
+  console.log("PASS: the plain-language popup distinguishes not fixed, refreshing, fixing, prepared, fixed, and failed states.");
 
   await runTopLevelHelperUntouched(edge);
   await runInertSources(edge);
@@ -68,62 +82,116 @@ try {
 
   assert.deepEqual(edge.runtimeErrors, [], formatRuntimeErrors(edge.runtimeErrors));
   console.log(
-    `Loaded Microsoft Edge v1.0.0 recovery and direct-flow smoke passed with ${edgeExecutable}` +
+    `Loaded Microsoft Edge v1.1.0 recovery and direct-flow smoke passed with ${edgeExecutable}` +
       (extension.fromZip ? ` using exact ZIP ${extension.archive}.` : " from the source tree.")
   );
 } finally {
   await recoveryEdge?.context.close().catch(() => undefined);
+  await manualEdge?.context.close().catch(() => undefined);
   await edge?.context.close().catch(() => undefined);
   await fixture?.close();
   extension.cleanup();
   if (recoveryProfile) rmSync(recoveryProfile, { recursive: true, force: true });
+  if (manualProfile) rmSync(manualProfile, { recursive: true, force: true });
   if (profile) rmSync(profile, { recursive: true, force: true });
 }
 
-async function runCompactPopupStates({ context, extensionOrigin, serviceWorker }) {
-  const popup = await openPopup(context, extensionOrigin, "Ready");
+async function runCompactPopupStates({ context, extensionOrigin }) {
+  await assertInitialCheckingPopup(context);
+
+  const popup = await openPopup(context, extensionOrigin, "No fix applied yet");
   assert.equal(await containsRequiredPermission(popup), true, "contentSettings must be granted as a required permission at load");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Open your Story Report as usual. The helper works automatically.");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open SAP Report Center to get started.");
+  assert.equal(await popup.locator("#fix-report").textContent(), "Fix this report");
+  assert.equal(await popup.locator("#fix-report").isDisabled(), true);
+  assert.equal(await popup.locator("#fix-action").isHidden(), true);
+  assert.equal(await popup.locator("#fix-guidance").textContent(), "Use this if the Story Report stays blank.");
   assert.equal(await popup.locator("#sap-help").textContent(), "Open SAP help article");
   await assertCompactPlainPopup(popup);
-  await assertSapHelpAction(context, popup);
+  await assertSapHelpAction(popup);
 
-  await setSyntheticStatus(serviceWorker, "continuation-in-progress");
-  await reloadPopupForTitle(popup, "Preparing your report…");
-  assert.equal(await popup.locator("#status-detail").textContent(), "Please wait a moment.");
+  await renderPopupStateForSmoke(popup, "idle", true);
+  await waitForPopupTitle(popup, "No fix applied yet");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open a Story Report. Help starts automatically if it is needed.");
+  assert.equal(await popup.locator("#fix-report").isDisabled(), false);
+  assert.equal(await popup.locator("#fix-action").isVisible(), true);
   await assertCompactPlainPopup(popup);
 
-  await setSyntheticStatus(serviceWorker, "replay-scheduled");
-  await reloadPopupForTitle(popup, "Report access ready");
-  assert.equal(await popup.locator("#status-detail").textContent(), "You can continue with your Story Report.");
+  await renderPopupStateForSmoke(popup, "page-refreshing", false);
+  await waitForPopupTitle(popup, "Refreshing SAP…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "The page is being prepared. Please wait.");
+  assert.equal(await popup.locator("#fix-action").isHidden(), true);
   await assertCompactPlainPopup(popup);
 
-  await setSyntheticStatus(serviceWorker, "automatic-fix-blocked");
-  await reloadPopupForTitle(popup, "Try the report again");
-  assert.equal(await popup.locator("#status-detail").textContent(), "If it still doesn’t open, view SAP’s help article.");
+  await renderPopupStateForSmoke(popup, "manual-refresh-started", false);
+  await waitForPopupTitle(popup, "Refresh started");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again when SAP is ready.");
   await assertCompactPlainPopup(popup);
 
-  await setSyntheticStatus(serviceWorker, "idle");
-  await reloadPopupForTitle(popup, "Ready");
+  await renderPopupStateForSmoke(popup, "continuation-in-progress", false);
+  await waitForPopupTitle(popup, "Applying the fix…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Please wait a few seconds.");
+  await assertCompactPlainPopup(popup);
+
+  await renderPopupStateForSmoke(popup, "page-prepared", false);
+  await waitForPopupTitle(popup, "SAP page prepared");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again. Help will continue automatically.");
+  await assertCompactPlainPopup(popup);
+
+  await renderPopupStateForSmoke(popup, "replay-scheduled", false);
+  await waitForPopupTitle(popup, "Fix applied");
+  assert.equal(await popup.locator("#status-detail").textContent(), "The browser fix is active. Return to your report.");
+  assert.equal(await popup.locator("#fix-action").isHidden(), true);
+  await assertCompactPlainPopup(popup);
+
+  await renderPopupStateForSmoke(popup, "automatic-fix-blocked", true);
+  await waitForPopupTitle(popup, "Fix not applied");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Use Fix this report, then open the Story again.");
+  assert.equal(await popup.locator("#fix-action").isVisible(), true);
+  await assertCompactPlainPopup(popup);
+
+  await renderPopupStateForSmoke(popup, "check-unavailable", false);
+  await waitForPopupTitle(popup, "Status unavailable");
+  assert.equal(await popup.locator("#status-detail").textContent(), "If the report is blank, you can still try the fix.");
+  assert.equal(await popup.locator("#fix-action").isVisible(), true);
+  await assertCompactPlainPopup(popup);
+
   await popup.close();
 }
 
-async function assertSapHelpAction(context, popup) {
-  await context.route(
-    SAP_KB_URL,
-    (route) => route.fulfill({
-      status: 200,
-      contentType: "text/html; charset=utf-8",
-      body: "<!doctype html><title>SAP KBA 3039244</title><h1>SAP support article</h1>"
-    }),
-    { times: 1 }
-  );
-  const openedPage = context.waitForEvent("page");
+async function assertInitialCheckingPopup(context) {
+  const popup = await context.newPage();
+  const html = readFileSync(join(extension.root, "src/popup.html"), "utf8")
+    .replace('<link rel="stylesheet" href="popup.css">', `<style>${readFileSync(join(extension.root, "src/popup.css"), "utf8")}</style>`)
+    .replace('<script src="popup.js"></script>', "");
+  await popup.setContent(html);
+  assert.equal(await popup.locator("#status-title").textContent(), "Checking this page…");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Please wait a moment.");
+  assert.equal(await popup.locator("#status-card").getAttribute("aria-busy"), "true");
+  assert.equal(await popup.locator("#fix-action").isHidden(), true);
+  const animationName = await popup.locator("#status-dot").evaluate((dot) => getComputedStyle(dot).animationName);
+  assert.equal(animationName, "status-pulse", "the initial checking indicator must be visibly animated");
+  await popup.close();
+}
+
+async function assertSapHelpAction(popup) {
+  await popup.evaluate(() => {
+    const original = chrome.tabs.create;
+    globalThis.__restoreSapHelpCreate = () => { chrome.tabs.create = original; };
+    chrome.tabs.create = (details) => {
+      globalThis.__capturedSapHelpCreate = details;
+      return Promise.resolve();
+    };
+  });
   await popup.locator("#sap-help").click();
-  const article = await openedPage;
-  await article.waitForURL(SAP_KB_URL);
-  assert.equal(article.url(), SAP_KB_URL, "the help action must open the exact public SAP KBA 3039244 URL");
-  await article.close();
+  const captured = await popup.evaluate(() => {
+    const details = globalThis.__capturedSapHelpCreate || null;
+    globalThis.__restoreSapHelpCreate?.();
+    delete globalThis.__capturedSapHelpCreate;
+    delete globalThis.__restoreSapHelpCreate;
+    return details;
+  });
+  assert.deepEqual(captured, { url: SAP_KB_URL }, "the visible help button must request only the fixed public SAP KBA");
 }
 
 async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
@@ -131,7 +199,7 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
 
   fixture.reset();
   const source = await context.newPage();
-  await source.goto(fixture.activationStoryUrl);
+  await source.goto(fixture.activationHomeUrl);
   const originalFrame = await waitForFrame(source, fixture.dormantFrameUrl);
   const initialAccess = await readStorageAccessState(originalFrame);
   assert.equal(initialAccess.hasAccess, false, "the pre-existing Story must begin with blocked third-party storage");
@@ -149,59 +217,48 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
   const sentinel = await probeActiveStorySentinel(edgeInstance.serviceWorker);
   assert.deepEqual(sentinel.response, {
     type: "sf-activation-current",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1
   });
   assert.ok(Number.isInteger(sentinel.tabId) && sentinel.tabId > 0);
-  assert.equal(sentinel.url, fixture.activationStoryUrl);
+  assert.equal(sentinel.url, fixture.activationHomeUrl);
   await assertQuiescent(fixture);
 
   const spaBefore = await captureSpaState(source);
-  const neutral = context.pages().find((page) => page !== source) || await context.newPage();
-  await neutral.goto("about:blank");
-  await source.bringToFront();
   const pagesBeforeReload = [...context.pages()];
   fixture.armActivationRecovery();
   const replayBarrier = fixture.holdNextReplay();
   edgeInstance.serviceWorker = await reloadExtensionContext(context, edgeInstance.serviceWorker);
   await waitUntil(() => legacyPauseMarkerIsAbsent(edgeInstance.serviceWorker));
 
-  await assertQuiescent(fixture);
-  assert.equal(fixture.sourceRequests, 1, "update/re-enable alone must not disrupt the active Story");
-  assert.equal(fixture.iasReplayRequests, 0);
-  const staleSentinel = await probeActiveStorySentinel(edgeInstance.serviceWorker);
-  assert.equal(staleSentinel.url, fixture.activationStoryUrl);
-  assert.equal(staleSentinel.response, null, "the pre-existing document must lack the reloaded build's live sentinel");
-
-  await neutral.bringToFront();
-  await source.bringToFront();
-
   await waitUntil(() => fixture.sourceRequests === 2 && fixture.iasInitialRequests === 2, 8_000);
   await waitForReplayBarrier(replayBarrier);
   const spaAfter = await captureSpaState(source);
 
   assert.deepEqual(context.pages(), pagesBeforeReload, "extension reload recovery must reuse the exact existing tab");
-  assert.equal(spaAfter.url, spaBefore.url, "the exact Story route and hash must be preserved");
+  assert.equal(spaAfter.url, spaBefore.url, "the Report Center home route and hash must be preserved");
   assert.deepEqual(spaAfter.historyState, spaBefore.historyState, "the SAP route state must be reconstructed unchanged");
   assert.deepEqual(spaAfter.shellState, spaBefore.shellState, "the same Story shell state must be reconstructed");
   assert.notEqual(spaAfter.documentNonce, spaBefore.documentNonce, "one ordinary reload must create one fresh document");
   assert.notEqual(spaAfter.navigationTimeOrigin, spaBefore.navigationTimeOrigin, "one ordinary reload must replace the document");
-  assert.equal(fixture.sourceRequests, 2, "the existing Story must receive exactly one recovery reload");
+  assert.equal(fixture.sourceRequests, 2, "the existing Report Center home page must receive exactly one recovery reload");
   assert.equal(fixture.analyticsRequests, 2);
   assert.equal(fixture.iasInitialRequests, 2);
-  assert.equal(fixture.iasReplayRequests, 1, "the reloaded Story must schedule exactly one native IAS POST");
+  assert.equal(fixture.iasReplayRequests, 1, "the reloaded Report Center page must schedule exactly one native IAS POST");
   assert.equal(fixture.helperRequests, 0, "install recovery must not open a helper tab");
   assert.equal(fixture.unexpectedIasMethods, 0);
 
-  const preparedPopup = await openPopup(context, extensionOrigin, "Report access ready");
-  const preparedStatus = await getStatus(preparedPopup);
-  assert.equal(preparedStatus.ok, true);
-  assert.equal(preparedStatus.code, "replay-scheduled");
+  const preparedPopup = await openPopup(context, extensionOrigin, "SAP is still loading", source);
+  const loadingStatus = await getStatus(preparedPopup);
+  assert.equal(loadingStatus.ok, true);
+  assert.equal(loadingStatus.code, "page-not-ready");
+  const recentResults = await readRecentResults(preparedPopup);
+  assert.equal(recentResults.at(-1)?.outcome, "replay-scheduled", "durable fix state must exist before the held POST is released");
   const activationAttempts = await readActivationAttempts(preparedPopup);
   assert.equal(activationAttempts.length, 1, "one terminal recovery marker must prevent any second reload");
   assert.deepEqual(Object.keys(activationAttempts[0]).sort(), ["at", "phase", "tabId", "version"]);
   assert.equal(activationAttempts[0].tabId, sentinel.tabId);
-  assert.equal(activationAttempts[0].version, "1.0.0");
+  assert.equal(activationAttempts[0].version, "1.1.0");
   assert.equal(activationAttempts[0].phase, "reload-attempted");
   assert.ok(Number.isSafeInteger(activationAttempts[0].at) && activationAttempts[0].at > 0);
   assert.doesNotMatch(JSON.stringify(activationAttempts[0]), /https?:|successfactors|accounts/i);
@@ -212,13 +269,82 @@ async function runPreExistingStoryRecoveryAfterExtensionReload(edgeInstance) {
   replayBarrier.release();
   await recoveredFrame.locator("#ias-replay-result").waitFor({ state: "attached", timeout: 5_000 });
   assert.equal(await recoveredFrame.locator("#ias-replay-result").textContent(), "IAS replay accepted");
+  await source.waitForLoadState("load");
+  await source.bringToFront();
+  await preparedPopup.reload();
+  await waitForPopupTitle(preparedPopup, "Fix applied");
+  const preparedStatus = await getStatus(preparedPopup);
+  assert.equal(preparedStatus.ok, true);
+  assert.equal(preparedStatus.code, "replay-scheduled");
   await preparedPopup.close();
 
   await source.bringToFront();
+  await source.evaluate(() => {
+    location.hash = "#/story/execute/action";
+  });
+  await waitUntil(() => source.url().endsWith("#/story/execute/action"));
   await assertQuiescent(fixture);
-  assert.equal(fixture.sourceRequests, 2, "tab activation after recovery must not cause a second reload");
-  assert.equal(fixture.iasReplayRequests, 1, "tab activation after recovery must not cause a duplicate IAS POST");
+  assert.equal(fixture.sourceRequests, 2, "same-tab Story routing after recovery must not cause a second reload");
+  assert.equal(fixture.iasReplayRequests, 1, "same-tab Story routing after recovery must not cause a duplicate IAS POST");
 
+  await source.close();
+}
+
+async function runManualFixOnCurrentReportCenter({ context, extensionOrigin }) {
+  fixture.reset();
+  const source = await context.newPage();
+  await source.goto(fixture.activationHomeUrl);
+  await waitForFrame(source, fixture.dormantFrameUrl);
+  await waitPastDetectionWindow();
+  await assertQuiescent(fixture);
+  assert.equal(fixture.sourceRequests, 1, "a current activation sentinel must prevent an automatic reload");
+  assert.equal(fixture.iasReplayRequests, 0);
+
+  await source.evaluate(() => {
+    location.hash = "#/story/execute/action";
+  });
+  await waitUntil(() => source.url().endsWith("#/story/execute/action"));
+  await assertQuiescent(fixture);
+  assert.equal(fixture.sourceRequests, 1, "same-tab routing with a current sentinel must remain reload-free");
+
+  const popup = await context.newPage();
+  await popup.goto(`${extensionOrigin}/src/popup.html`);
+  await source.bringToFront();
+  await popup.reload();
+  await waitForPopupTitle(popup, "No fix applied yet");
+  assert.equal(await popup.locator("#fix-report").isDisabled(), false, "the manual action must be available only on Report Center");
+  assert.equal(await popup.locator("#fix-guidance").textContent(), "Use this if the Story Report stays blank.");
+
+  fixture.armActivationRecovery();
+  const replayBarrier = fixture.holdNextReplay();
+  await popup.locator("#fix-report").click();
+  await waitForPopupTitle(popup, "Refresh started");
+  assert.equal(await popup.locator("#status-detail").textContent(), "Open the Story Report again when SAP is ready.");
+  assert.equal(fixture.sourceRequests, 1, "the accepted result must render before the delayed reload starts");
+  await waitUntil(() => fixture.sourceRequests === 2 && fixture.iasInitialRequests === 2, 8_000);
+  await waitForReplayBarrier(replayBarrier);
+
+  await source.bringToFront();
+  const whileLoading = await sendPopupMessage(popup, { type: "force-fix-current-tab" });
+  assert.equal(whileLoading?.ok, true);
+  assert.equal(whileLoading?.code, "page-not-ready");
+  await assertQuiescent(fixture);
+  assert.equal(fixture.sourceRequests, 2, "an immediate repeated manual request must not reload again");
+  assert.equal(fixture.iasReplayRequests, 1, "an immediate repeated manual request must not duplicate the IAS POST");
+
+  replayBarrier.release();
+  const recoveredFrame = source.frames().find((frame) => frame.url() === fixture.frameUrl);
+  assert.ok(recoveredFrame, "the manual reload must retain the recovering IAS frame");
+  await recoveredFrame.locator("#ias-replay-result").waitFor({ state: "attached", timeout: 5_000 });
+  await source.waitForLoadState("load");
+  await source.bringToFront();
+  await popup.reload();
+  await waitForPopupTitle(popup, "Fix applied");
+  const duplicate = await sendPopupMessage(popup, { type: "force-fix-current-tab" });
+  assert.equal(duplicate?.ok, true);
+  assert.equal(duplicate?.code, "fix-already-applied");
+  assert.equal(fixture.sourceRequests, 2, "an already-applied fix must not reload again");
+  await popup.close();
   await source.close();
 }
 
@@ -229,7 +355,7 @@ async function probeActiveStorySentinel(serviceWorker) {
     try {
       const response = await chrome.tabs.sendMessage(
         tab.id,
-        { type: "sf-activation-probe", build: "1.0.0", protocol: 1 },
+        { type: "sf-activation-probe", build: "1.1.0", protocol: 1 },
         { frameId: 0 }
       );
       return { tabId: tab.id, url: tab.url || null, response: response || null };
@@ -329,6 +455,7 @@ async function runInertSources({ context, extensionOrigin }) {
 
 async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
   fixture.reset();
+  fixture.armActivationRecovery();
   const replayBarrier = fixture.holdNextReplay();
   const source = await context.newPage();
   const pageCountBefore = context.pages().length;
@@ -344,12 +471,13 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
   assert.equal(source.frames().includes(iasFrame), true, "the exact original IAS frame must own the held POST");
   assert.equal(iasFrame.url(), fixture.frameUrl);
 
-  const popup = await openPopup(context, extensionOrigin, "Report access ready");
-  const status = await getStatus(popup);
-  assert.equal(status.ok, true);
-  assert.equal(status.code, "replay-scheduled", "durable status must exist before the held POST is released");
-  assert.equal(status.activeCount, 0);
-  assert.equal(await popup.locator("#status-detail").textContent(), "You can continue with your Story Report.");
+  const popup = await openPopup(context, extensionOrigin, "SAP is still loading", source);
+  const loadingStatus = await getStatus(popup);
+  assert.equal(loadingStatus.ok, true);
+  assert.equal(loadingStatus.code, "page-not-ready");
+  assert.equal(loadingStatus.activeCount, 0);
+  const recentResults = await readRecentResults(popup);
+  assert.equal(recentResults.at(-1)?.outcome, "replay-scheduled", "durable status must exist before the held POST is released");
   assert.equal(await popup.locator("#sap-help").textContent(), "Open SAP help article");
   await assertCompactPlainPopup(popup);
   assert.equal(await getEffectiveCookieSettingFromPopup(popup), "allow", "the exact IAS/SF pair must be effective");
@@ -357,6 +485,14 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
   replayBarrier.release();
   await iasFrame.locator("#ias-replay-result").waitFor({ state: "attached", timeout: 5_000 });
   assert.equal(await iasFrame.locator("#ias-replay-result").textContent(), "IAS replay accepted");
+  await source.waitForLoadState("load");
+  await source.bringToFront();
+  await popup.reload();
+  await waitForPopupTitle(popup, "Fix applied");
+  const status = await getStatus(popup);
+  assert.equal(status.ok, true);
+  assert.equal(status.code, "replay-scheduled");
+  assert.equal(await popup.locator("#status-detail").textContent(), "The browser fix is active. Return to your report.");
   assert.equal(source.frames().includes(iasFrame), true, "the same nested frame must receive the POST response");
   await assertQuiescent(fixture);
 
@@ -372,10 +508,10 @@ async function runDirectAttempt({ context, extensionOrigin }, storyUrl) {
 }
 
 async function assertAutomaticStateAfterRestart({ context, extensionOrigin }) {
-  const popup = await openPopup(context, extensionOrigin, "Ready");
+  const popup = await openPopup(context, extensionOrigin, "No fix applied yet");
   const status = await getStatus(popup);
   assert.equal(status.ok, true);
-  assert.equal(status.code, "idle");
+  assert.equal(status.code, "unsupported-page");
   assert.equal(status.activeCount, 0);
   assert.equal(await containsRequiredPermission(popup), true);
   assert.equal(await getEffectiveCookieSettingFromPopup(popup), "allow");
@@ -423,7 +559,7 @@ async function launchEdge(userDataDir) {
   const serviceWorker = context.serviceWorkers().find((worker) => worker.url().startsWith("chrome-extension://"));
   const serviceWorkerUrl = new URL(serviceWorker.url());
   const extensionOrigin = `${serviceWorkerUrl.protocol}//${serviceWorkerUrl.host}`;
-  assert.equal(await serviceWorker.evaluate(() => chrome.runtime.getManifest().version), "1.0.0");
+  assert.equal(await serviceWorker.evaluate(() => chrome.runtime.getManifest().version), "1.1.0");
   return { context, extensionOrigin, runtimeErrors, serviceWorker };
 }
 
@@ -437,20 +573,27 @@ function configureBlockedCookieProfile(userDataDir) {
   );
 }
 
-async function openPopup(context, extensionOrigin, expectedTitle) {
+async function openPopup(context, extensionOrigin, expectedTitle, activePage = null) {
   const popup = await context.newPage();
   await popup.goto(`${extensionOrigin}/src/popup.html`);
+  if (activePage) {
+    await activePage.bringToFront();
+    await popup.reload();
+  }
   await waitForPopupTitle(popup, expectedTitle);
   return popup;
 }
 
-async function reloadPopupForTitle(popup, expectedTitle) {
-  await popup.reload();
-  await waitForPopupTitle(popup, expectedTitle);
-}
-
 async function waitForPopupTitle(popup, expectedTitle) {
-  await waitUntil(async () => (await popup.locator("#status-title").textContent()) === expectedTitle);
+  let observedTitle = null;
+  try {
+    await waitUntil(async () => {
+      observedTitle = await popup.locator("#status-title").textContent();
+      return observedTitle === expectedTitle;
+    });
+  } catch {
+    throw new Error(`Timed out waiting for popup title ${JSON.stringify(expectedTitle)}; observed ${JSON.stringify(observedTitle)}.`);
+  }
 }
 
 async function assertCompactPlainPopup(popup) {
@@ -462,49 +605,55 @@ async function assertCompactPlainPopup(popup) {
     inputs: document.querySelectorAll("input, select, textarea").length,
     buttons: Array.from(document.querySelectorAll("button"), (button) => ({ id: button.id, text: button.textContent.trim() }))
   }));
-  assert.equal(surface.width, 332);
-  assert.ok(surface.height <= 360, `popup must remain compact, observed ${surface.height}px`);
+  assert.equal(surface.width, 392);
+  assert.ok(surface.height <= 460, `popup must remain clear without excessive height, observed ${surface.height}px`);
   assert.equal(surface.statusCards, 1);
   assert.equal(surface.inputs, 0);
-  assert.deepEqual(surface.buttons, [{ id: "sap-help", text: "Open SAP help article" }]);
+  assert.deepEqual(surface.buttons, [
+    { id: "fix-report", text: "Fix this report" },
+    { id: "sap-help", text: "Open SAP help article" }
+  ]);
   assert.doesNotMatch(surface.text, /\b(?:IAS|contentSettings|cookie|origin|replay|durable)\b/i);
   assert.doesNotMatch(surface.text, /\b(?:pause|resume)\b/i);
 }
 
-async function setSyntheticStatus(serviceWorker, code) {
-  await serviceWorker.evaluate(
-    async ({ key, statusCode }) => {
-      const stored = await chrome.storage.session.get(key);
-      const current = stored[key];
-      const state = current?.version === 9
-        ? current
-        : { version: 9, workflows: [], recent: [], activationAttempts: [], lastStatus: { code: "idle", at: 0 } };
-      state.workflows = [];
-      state.recent = [];
-      state.activationAttempts = [];
-      state.lastStatus = { code: statusCode, at: Date.now() };
-      await chrome.storage.session.set({ [key]: state });
+async function renderPopupStateForSmoke(popup, code, canFixCurrentPage) {
+  await popup.evaluate(
+    ({ statusCode, canFix }) => {
+      renderStatus(statusCode, canFix);
+      setFixVisibility(shouldShowFix({ code: statusCode, canFixCurrentPage: canFix }));
     },
-    { key: STATE_KEY, statusCode: code }
+    { statusCode: code, canFix: canFixCurrentPage }
   );
 }
 
 async function getStatus(popup) {
-  return popup.evaluate(() => new Promise((resolveStatus) => {
-    chrome.runtime.sendMessage({ type: "get-status" }, (response) => {
+  return sendPopupMessage(popup, { type: "get-status" });
+}
+
+async function sendPopupMessage(popup, message) {
+  return popup.evaluate((request) => new Promise((resolveStatus) => {
+    chrome.runtime.sendMessage(request, (response) => {
       if (chrome.runtime.lastError) {
         resolveStatus({ ok: false, code: "runtime-error" });
         return;
       }
       resolveStatus(response || { ok: false, code: "missing-response" });
     });
-  }));
+  }), message);
 }
 
 async function readActivationAttempts(popup) {
   return popup.evaluate(async (key) => {
     const stored = await chrome.storage.session.get(key);
     return stored[key]?.activationAttempts || [];
+  }, STATE_KEY);
+}
+
+async function readRecentResults(popup) {
+  return popup.evaluate(async (key) => {
+    const stored = await chrome.storage.session.get(key);
+    return stored[key]?.recent || [];
   }, STATE_KEY);
 }
 
@@ -599,7 +748,7 @@ async function waitPastDormantDetectionWindow() {
 }
 
 async function startFixtureServer() {
-  const certificateDirectory = mkdtempSync(join(tmpdir(), "sap-story-helper-cert-v100-"));
+  const certificateDirectory = mkdtempSync(join(tmpdir(), "sap-story-helper-cert-v101-"));
   const keyPath = join(certificateDirectory, "fixture-key.pem");
   const certificatePath = join(certificateDirectory, "fixture-cert.pem");
   const openssl = spawnSync(
@@ -653,8 +802,10 @@ async function startFixtureServer() {
             <main id="story-shell">Story report shell</main>
             <iframe title="analytics" src="${childUrl}"></iframe>
             <script>
-              history.replaceState({ route: "story-execute", shellVersion: 1 }, "", location.pathname + "#/story/execute/action");
-              window.__sapStorySmokeState = { route: "story-execute", shellVersion: 1, unsavedUiNonce: "fixture-state-1" };
+              const requestedHash = location.hash.startsWith("#/") ? location.hash : "#/home";
+              const requestedRoute = requestedHash.startsWith("#/story/") ? "story-execute" : "home";
+              history.replaceState({ route: requestedRoute, shellVersion: 1 }, "", location.pathname + requestedHash);
+              window.__sapStorySmokeState = { route: requestedRoute, shellVersion: 1, unsavedUiNonce: "fixture-state-1" };
             </script>
           </body>
         </html>`);
@@ -777,7 +928,8 @@ async function startFixtureServer() {
     sfOrigin,
     iasOrigin,
     unapprovedOrigin,
-    firstStoryUrl: `${sfOrigin}/story/first`,
+    firstStoryUrl: `${sfOrigin}${activationStoryPath}#/story/execute/action`,
+    activationHomeUrl: `${sfOrigin}${activationStoryPath}#/home?tab=myreports&view=reports`,
     activationStoryUrl: `${sfOrigin}${activationStoryPath}#/story/execute/action`,
     malformedStoryUrl: `${sfOrigin}/story/malformed`,
     staleStoryUrl: `${sfOrigin}/story/stale`,
@@ -898,8 +1050,9 @@ function assertSmokeArchitecture(extensionRoot) {
   const activation = readFileSync(join(extensionRoot, "src/sf-activation.js"), "utf8");
   const popup = readFileSync(join(extensionRoot, "src/popup.js"), "utf8");
   const popupHtml = readFileSync(join(extensionRoot, "src/popup.html"), "utf8");
+  const popupCss = readFileSync(join(extensionRoot, "src/popup.css"), "utf8");
 
-  assert.equal(manifest.version, "1.0.0");
+  assert.equal(manifest.version, "1.1.0");
   assert.deepEqual(manifest.permissions, ["storage", "alarms", "contentSettings"]);
   assert.equal(manifest.optional_permissions, undefined);
   assert.equal(manifest.optional_host_permissions, undefined);
@@ -929,15 +1082,34 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.match(background, /await cookies\.set\s*\(/, "runtime must set a bounded cookie content rule");
   assert.match(background, /chrome\.contentSettings\.cookies\.get/, "runtime must verify the exact effective rule");
   assert.match(background, /replay-schedule-committed/, "runtime must retain the durable replay barrier");
+  assert.match(background, /chrome\.tabs\.onUpdated\.addListener/, "same-tab Report Center transitions must be observed");
+  assert.match(background, /startupActivationScanDecisionPromise/, "worker startup must retain its safe scan decision");
+  assert.match(background, /shouldScan \? evaluateActiveReportCenterTabs\(\) : undefined/, "same-build worker startup must inspect the active page");
+  assert.match(background, /isSupportedReportCenterUrl\(tab\.url\)/, "recovery must remain on the exact Report Center path");
+  assert.match(background, /message\.type === "force-fix-current-tab" && hasExactKeys\(message, \["type"\]\)/);
+  assert.match(background, /message\.type === "force-fix-current-tab"[\s\S]{0,240}isTrustedPopupSender\(sender\)/);
+  assert.match(background, /const MANUAL_FIX_COOLDOWN_MS = 30_000/);
+  assert.match(background, /const MANUAL_RELOAD_DELAY_MS = 1_200/);
+  assert.match(background, /canFixCurrentPage/);
+  assert.match(background, /currentPageState/);
+  assert.match(background, /scheduleClaimedReportCenterReload\(currentTab\.id, currentTab\.windowId\)/);
+  assert.match(background, /async function performClaimedReportCenterReload/);
+  assert.match(background, /assessActiveAllowanceForTab/);
+  assert.match(background, /effective\?\.setting === "allow"/);
   assert.doesNotMatch(background, /\bchrome\s*\.\s*tabs\s*\.\s*create\s*\(/, "recovery must not create helper or replacement tabs");
   assert.equal(
     (background.match(/\bchrome\s*\.\s*tabs\s*\.\s*reload\s*\(/g) || []).length,
-    1,
-    "activation recovery may contain exactly one reviewed ordinary-reload site"
+    2,
+    "automatic and manual recovery may contain only their two reviewed ordinary-reload sites"
   );
   assert.ok(
     background.indexOf("state.activationAttempts.push(attempt)") < background.search(/\bchrome\s*\.\s*tabs\s*\.\s*reload\s*\(/),
     "the durable once-only recovery tombstone must be persisted before tabs.reload"
+  );
+  assert.ok(
+    background.indexOf("state.activationAttempts = [...remainingAttempts, attempt]") <
+      background.indexOf("scheduleClaimedReportCenterReload(currentTab.id, currentTab.windowId)"),
+    "the manual recovery tombstone must be persisted before its delayed reload is scheduled"
   );
   assert.match(content, /if \(window\.top === window\) return;/, "top-level SAP helper pages must remain untouched");
   assert.match(content, /resume-with-cookie-exception/);
@@ -945,7 +1117,7 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.match(content, /replayGate\.then\(\(\) => submitReplayPlan\(result\)\)/);
   assert.doesNotMatch(content, /\bnew\s+FormData\s*\(/, "extension must not serialize POST fields");
   assert.doesNotMatch(content, /\bcontrol\s*\.\s*value\b/, "extension must not read POST field values");
-  assert.match(activation, /const BUILD = "1\.0\.0";/);
+  assert.match(activation, /const BUILD = "1\.1\.0";/);
   assert.match(activation, /const PROTOCOL = 1;/);
   assert.match(activation, /message\.type !== "sf-activation-probe"/);
   assert.match(activation, /type: "sf-activation-current"/);
@@ -954,11 +1126,23 @@ function assertSmokeArchitecture(extensionRoot) {
   assert.doesNotMatch(popup, /chrome\.permissions\.(?:request|remove)/, "required permission must have no popup permission gate");
   assert.doesNotMatch(popup, /(?:open-fresh-report-center|helper-ready|recoveryOfferId)/);
   assert.doesNotMatch(popup, /(?:pause-automatic-fixing|resume-automatic-fixing)/);
+  assert.match(popupHtml, /id="status-title">Checking this page…/);
+  assert.match(popupHtml, /id="fix-action" hidden/);
+  assert.match(popupCss, /\.status-dot\.checking\s*\{[^}]*animation:/s);
+  assert.match(popupCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none/s);
+  assert.match(popup, /sendRuntimeMessage\(\{ type: "force-fix-current-tab" \}\)/);
   assert.match(popup, /const SAP_KB_URL = "https:\/\/userapps\.support\.sap\.com\/sap\/support\/knowledge\/en\/3039244";/);
   assert.match(popup, /chrome\.tabs\.create\(\{ url: SAP_KB_URL \}\)/);
   assert.equal((popup.match(/chrome\.tabs\.create\s*\(/g) || []).length, 1);
-  assert.equal((popupHtml.match(/<button\b/g) || []).length, 1);
-  assert.match(popupHtml, /<button id="sap-help" type="button">Open SAP help article<\/button>/);
+  assert.equal((popupHtml.match(/<button\b/g) || []).length, 2);
+  assert.match(popupHtml, /id="fix-report"/);
+  assert.match(popupHtml, /Fix this report/);
+  assert.match(popupHtml, /id="sap-help"/);
+  assert.match(popupHtml, /Open SAP help article/);
+  assert.match(popup, /sendRuntimeMessage\(\{ type: "force-fix-current-tab" \}\)/);
+  assert.match(popup, /fixed: \["Fix applied"/);
+  assert.match(popup, /idle: \["No fix applied yet"/);
+  assert.match(popup, /if \(code === "replay-scheduled" \|\| code === "fix-already-applied"\) return "fixed"/);
   assert.doesNotMatch(popupHtml, /\b(?:IAS|contentSettings|cookie|origin|replay|durable)\b/i);
   assert.doesNotMatch(popupHtml, /\b(?:pause|resume)\b/i);
 }
@@ -968,7 +1152,7 @@ function prepareExtensionRoot() {
   if (!zip) return { root: projectRoot, archive: null, fromZip: false, cleanup: () => undefined };
   const archive = resolve(zip);
   if (!existsSync(archive)) throw new Error(`Store ZIP not found: ${archive}`);
-  const extracted = mkdtempSync(join(tmpdir(), "sap-story-helper-package-v100-"));
+  const extracted = mkdtempSync(join(tmpdir(), "sap-story-helper-package-v101-"));
   const attempts = archiveExtractionAttempts(archive, extracted);
   let lastError = "no compatible archive extractor was found";
   for (const attempt of attempts) {

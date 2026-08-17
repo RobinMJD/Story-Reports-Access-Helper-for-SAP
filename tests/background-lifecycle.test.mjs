@@ -11,6 +11,7 @@ import {
   STORY_REPORT_HASH,
   STORY_REPORT_PATH,
   createEmptyState,
+  isSupportedReportCenterUrl,
   isSafeResumeAttemptId,
   makeActivationRecoveryAttempt,
   makeReliableLedgerEntry
@@ -31,6 +32,7 @@ const STORY_QUERY_PATTERNS = [
   "https://*.sapcloud.cn/xi/ui/reportcenter/pages/reportCenter.xhtml*"
 ];
 const LEGACY_RELIABLE_CONTROL_KEY = "sapIasReliableModeControl.v1";
+const SF_ACTIVATION_BUILD_KEY = "sapStoryAccessActivationBuild.v1";
 const ATTEMPT_ID = "123e4567-e89b-42d3-a456-426614174000";
 
 test("cold-worker messages wait for startup reconciliation before any workflow claim", async () => {
@@ -324,16 +326,26 @@ test("only status is accepted from the exact popup sender and it exposes no site
   assert.equal(harness.cookieClears.length, 0);
 
   const status = await harness.popup("get-status");
-  assert.equal(status.version, "1.0.0");
-  assert.deepEqual(Object.keys(status).sort(), ["activeCount", "code", "ok", "version"]);
+  assert.equal(status.version, "1.1.0");
+  assert.deepEqual(Object.keys(status).sort(), [
+    "activeCount",
+    "canFixCurrentPage",
+    "code",
+    "currentPageState",
+    "ok",
+    "version"
+  ]);
+  assert.equal(status.code, "unsupported-page");
+  assert.equal(status.canFixCurrentPage, false);
+  assert.equal(status.currentPageState, "unsupported");
   const serialized = JSON.stringify(status);
   assert.equal(serialized.includes(IAS_ORIGIN), false);
   assert.equal(serialized.includes(SF_ORIGIN), false);
   assert.equal(serialized.includes("https://"), false);
 });
 
-test("startup performs no tab scan and install probes active exact Story tabs without reloading a current sentinel", async () => {
-  const harness = await createHarness();
+test("fresh install skips the generic startup scan and probes its active Report Center tab", async () => {
+  const harness = await createHarness({ activationBuildMarker: null });
   assert.equal(harness.startupEvents.includes("tabs-queried"), false);
   assert.equal(harness.activationProbes.length, 0);
   harness.setTab(makeStoryTab());
@@ -349,7 +361,7 @@ test("startup performs no tab scan and install probes active exact Story tabs wi
   }]);
   assert.deepEqual(harness.activationProbes[0], {
     tabId: 20,
-    message: { type: "sf-activation-probe", build: "1.0.0", protocol: 1 },
+    message: { type: "sf-activation-probe", build: "1.1.0", protocol: 1 },
     options: { frameId: 0 }
   });
   assert.equal(harness.tabGets.length, 0);
@@ -357,9 +369,47 @@ test("startup performs no tab scan and install probes active exact Story tabs wi
   assert.deepEqual(harness.state().activationAttempts, []);
 });
 
-test("an absent install sentinel is revalidated, tombstoned without site data, and reloaded exactly once", async () => {
+test("same-build worker startup scans an existing Report Center page without reloading a current sentinel", async () => {
+  const harness = await createHarness({
+    initialTab: makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` })
+  });
+  await harness.until(() => harness.activationProbes.length === 1);
+  await settle();
+  assert.deepEqual(harness.tabQueries, [{
+    active: true,
+    lastFocusedWindow: true,
+    url: STORY_QUERY_PATTERNS
+  }]);
+  assert.equal(harness.tabReloads.length, 0);
+  assert.deepEqual(harness.state().activationAttempts, []);
+});
+
+test("a version transition records the new build and skips an immediate active-tab scan", async () => {
+  const harness = await createHarness({
+    activationBuildMarker: "1.0.0",
+    initialTab: makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` })
+  });
+  await settle();
+  assert.equal(harness.local[SF_ACTIVATION_BUILD_KEY], "1.1.0");
+  assert.equal(harness.tabQueries.length, 0);
+  assert.equal(harness.activationProbes.length, 0);
+  assert.equal(harness.tabReloads.length, 0);
+});
+
+test("same-build restart recovers a Report Center page that predates the restarted worker", async () => {
   const harness = await createHarness();
-  harness.setTab(makeStoryTab());
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.setActivationProbeFails(true);
+  harness.resetTrace();
+  await harness.restart();
+  await harness.until(() => harness.tabReloads.length === 1);
+  assert.equal(harness.activationProbes.length, 1);
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-pending");
+});
+
+test("an absent install sentinel on Report Center home is tombstoned and reloaded exactly once", async () => {
+  const harness = await createHarness({ activationBuildMarker: null });
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
   harness.setActivationProbeFails(true);
   harness.resetTrace();
 
@@ -370,7 +420,7 @@ test("an absent install sentinel is revalidated, tombstoned without site data, a
   const attempt = harness.state().activationAttempts[0];
   assert.deepEqual(Object.keys(attempt).sort(), ["at", "phase", "tabId", "version"]);
   assert.equal(attempt.tabId, 20);
-  assert.equal(attempt.version, "1.0.0");
+  assert.equal(attempt.version, "1.1.0");
   assert.equal(attempt.phase, "reload-pending");
   assert.equal(JSON.stringify(attempt).includes("http"), false);
   assert.ok(
@@ -406,7 +456,189 @@ test("update-family install events are inert while a later activation can recove
   assert.equal(harness.activationProbes.length, 1);
 });
 
-test("activation recovery rejects every ineligible or non-exact tab before probing", async () => {
+test("completed Report Center navigation is evaluated and recovered through tabs.onUpdated", async () => {
+  const harness = await createHarness();
+  const homeUrl = `${SF_ORIGIN}${STORY_REPORT_PATH}#/home`;
+  harness.setTab(makeStoryTab({ url: homeUrl }));
+  harness.setActivationProbeFails(true);
+  harness.resetTrace();
+
+  harness.fireUpdated(20, { status: "complete" });
+  await harness.until(() => harness.tabReloads.length === 1);
+  assert.equal(harness.activationProbes.length, 1);
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-pending");
+
+  harness.fireUpdated(20, { audible: false });
+  await settle();
+  assert.equal(harness.tabReloads.length, 1);
+});
+
+test("the popup reports current-tab state and schedules one guarded manual refresh after responding", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.resetTrace();
+
+  assert.deepEqual(await harness.popup("get-status"), {
+    ok: true,
+    code: "idle",
+    activeCount: 0,
+    version: "1.1.0",
+    canFixCurrentPage: true,
+    currentPageState: "ready"
+  });
+
+  const acceptedAt = Date.now();
+  const accepted = await harness.popup("force-fix-current-tab");
+  assert.deepEqual(accepted, {
+    ok: true,
+    code: "manual-refresh-started",
+    activeCount: 0,
+    version: "1.1.0",
+    canFixCurrentPage: false,
+    currentPageState: "ready"
+  });
+  assert.equal(harness.tabReloads.length, 0, "popup response precedes the delayed reload");
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-scheduled");
+
+  const duplicate = await harness.popup("force-fix-current-tab");
+  assert.equal(duplicate.code, "fix-in-progress");
+  assert.equal(duplicate.canFixCurrentPage, false);
+
+  await harness.until(() => harness.tabReloads.length === 1, 2_000);
+  assert.ok(Date.now() - acceptedAt >= 1_100);
+  await settle(25);
+  assert.equal(harness.tabReloads.length, 1);
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-pending");
+  assert.ok(
+    harness.events.indexOf("activation-attempt-write") < harness.events.indexOf("tab-reload:20"),
+    harness.events.join(", ")
+  );
+
+  harness.setTab(makeStoryTab({
+    status: "loading",
+    url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home`
+  }));
+  assert.equal((await harness.activationReady()).code, "sf-activation-ready");
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  const prepared = await harness.popup("get-status");
+  assert.equal(prepared.code, "page-prepared");
+  assert.equal(prepared.canFixCurrentPage, false);
+});
+
+test("manual refresh clears only stale terminal records for the active tab", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  const state = createEmptyState();
+  const oldAt = Date.now() - 31_000;
+  state.recent.push({
+    sourceTabId: 20,
+    sourceWindowId: 2,
+    sourceFrameId: 7,
+    sourceDocumentId: "old-target-document",
+    iasOrigin: IAS_ORIGIN,
+    sourceOrigin: SF_ORIGIN,
+    outcome: "automatic-fix-blocked",
+    at: oldAt
+  }, {
+    sourceTabId: 99,
+    sourceWindowId: 2,
+    sourceFrameId: 8,
+    sourceDocumentId: "other-tab-document",
+    iasOrigin: IAS_ORIGIN,
+    sourceOrigin: SF_ORIGIN,
+    outcome: "automatic-fix-blocked",
+    at: oldAt
+  });
+  state.activationAttempts.push(
+    makeActivationRecoveryAttempt(20, "1.1.0", oldAt, "reload-attempted"),
+    makeActivationRecoveryAttempt(99, "1.1.0", oldAt, "reload-attempted")
+  );
+  harness.setState(state);
+  harness.resetTrace();
+
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "manual-refresh-started");
+  assert.equal(harness.state().recent.some((entry) => entry.sourceTabId === 20), false);
+  assert.equal(harness.state().recent.some((entry) => entry.sourceTabId === 99), true);
+  assert.equal(
+    harness.state().activationAttempts.some(
+      (attempt) => attempt.tabId === 20 && attempt.phase === "reload-attempted"
+    ),
+    false
+  );
+  assert.equal(
+    harness.state().activationAttempts.some(
+      (attempt) => attempt.tabId === 99 && attempt.phase === "reload-attempted"
+    ),
+    true
+  );
+  await harness.until(() => harness.tabReloads.length === 1, 2_000);
+});
+
+test("verified current-origin allowances are reported as applied and override old failures", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.local[RELIABLE_LEDGER_KEY] = {
+    version: 1,
+    entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
+  };
+  const state = createEmptyState();
+  state.recent.push({
+    sourceTabId: 20,
+    sourceWindowId: 2,
+    sourceFrameId: 7,
+    sourceDocumentId: "old-failed-document",
+    iasOrigin: IAS_ORIGIN,
+    sourceOrigin: SF_ORIGIN,
+    outcome: "automatic-fix-blocked",
+    at: Date.now() - 5_000
+  });
+  harness.setState(state);
+  harness.resetTrace();
+
+  const status = await harness.popup("get-status");
+  assert.equal(status.code, "replay-scheduled");
+  assert.equal(status.canFixCurrentPage, false);
+  assert.equal(status.currentPageState, "ready");
+  assert.equal(harness.cookieGets.length, 1);
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "fix-already-applied");
+  assert.equal(harness.tabReloads.length, 0);
+});
+
+test("a stored allowance overridden by browser policy is not reported as applied", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.local[RELIABLE_LEDGER_KEY] = {
+    version: 1,
+    entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
+  };
+  harness.setEffectiveCookieSetting("block");
+  harness.resetTrace();
+
+  const status = await harness.popup("get-status");
+  assert.equal(status.code, "idle");
+  assert.equal(status.canFixCurrentPage, true);
+  assert.equal(harness.cookieGets.length, 1);
+});
+
+test("an unverifiable effective allowance reports check-unavailable and manual action fails closed", async () => {
+  const harness = await createHarness();
+  harness.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+  harness.local[RELIABLE_LEDGER_KEY] = {
+    version: 1,
+    entries: [makeReliableLedgerEntry(IAS_ORIGIN, SF_ORIGIN, Date.now() - 1_000)]
+  };
+  harness.setCookieGetFails(true);
+  harness.resetTrace();
+
+  const status = await harness.popup("get-status");
+  assert.equal(status.code, "check-unavailable");
+  assert.equal(status.canFixCurrentPage, false);
+  assert.equal((await harness.popup("force-fix-current-tab")).code, "check-unavailable");
+  assert.deepEqual(harness.state().activationAttempts, []);
+  assert.equal(harness.tabReloads.length, 0);
+});
+
+test("activation recovery rejects every ineligible or unsupported tab before probing", async () => {
   const cases = [
     { active: false },
     { status: "loading" },
@@ -414,7 +646,7 @@ test("activation recovery rejects every ineligible or non-exact tab before probi
     { discarded: true },
     { frozen: true },
     { pendingUrl: STORY_URL },
-    { url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` },
+    { url: `${SF_ORIGIN}${STORY_REPORT_PATH}#home` },
     { url: `https://sampletenant.successfactors.eu.evil.example${STORY_REPORT_PATH}${STORY_REPORT_HASH}` },
     { url: `https://sampletenant.successfactors.eu:8443${STORY_REPORT_PATH}${STORY_REPORT_HASH}` }
   ];
@@ -444,7 +676,7 @@ test("a stale sentinel triggers recovery but a changed final tab fails closed", 
   changed.setTab(makeStoryTab());
   changed.setActivationProbeFails(true);
   changed.setActivationRereadHook(({ call }) => {
-    if (call === 2) changed.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+    if (call === 2) changed.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}/extra#/home` }));
   });
   changed.resetTrace();
   changed.fireActivated(20);
@@ -533,7 +765,7 @@ test("a malformed sentinel response is not mistaken for the exact current build"
   harness.setTab(makeStoryTab());
   harness.setActivationProbeResponse({
     type: "sf-activation-current",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1,
     extra: true
   });
@@ -578,7 +810,7 @@ test("focus loss or navigation around the write-ahead claim prevents an unrelate
   navigated.setTab(makeStoryTab());
   navigated.setActivationProbeFails(true);
   navigated.setActivationAttemptWriteHook(() => {
-    navigated.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
+    navigated.setTab(makeStoryTab({ url: `${SF_ORIGIN}${STORY_REPORT_PATH}/extra#/home` }));
   });
   navigated.resetTrace();
   navigated.fireActivated(20, 2);
@@ -603,11 +835,11 @@ test("workflow history, an existing attempt, or the global cap blocks probe and 
       at: Date.now()
     })],
     ["existing terminal attempt", (state) => state.activationAttempts.push(
-      makeActivationRecoveryAttempt(20, "1.0.0", Date.now(), "reload-attempted")
+      makeActivationRecoveryAttempt(20, "1.1.0", Date.now(), "reload-attempted")
     )],
     ["global cap", (state) => {
       state.activationAttempts = Array.from({ length: MAX_ACTIVATION_RECOVERY_ATTEMPTS }, (_, index) =>
-        makeActivationRecoveryAttempt(100 + index, "1.0.0", Date.now() - index)
+        makeActivationRecoveryAttempt(100 + index, "1.1.0", Date.now() - index)
       );
     }]
   ];
@@ -691,7 +923,7 @@ test("the reloaded top-page sentinel hands pending recovery to IAS without permi
   });
   assert.deepEqual(harness.state().activationAttempts, [{
     tabId: 20,
-    version: "1.0.0",
+    version: "1.1.0",
     at: harness.state().activationAttempts[0].at,
     phase: "reload-attempted"
   }]);
@@ -744,10 +976,10 @@ test("a later exact activation probe recovers a lost page-start handoff without 
   assert.equal(harness.state().activationAttempts[0].phase, "reload-attempted");
 });
 
-test("only the exact current top-page sentinel can cover a pending reload", async () => {
+test("only a current supported top-page sentinel can cover a pending reload", async () => {
   const harness = await createHarness();
   const state = createEmptyState();
-  state.activationAttempts.push(makeActivationRecoveryAttempt(20, "1.0.0", Date.now()));
+  state.activationAttempts.push(makeActivationRecoveryAttempt(20, "1.1.0", Date.now()));
   harness.setState(state);
   harness.setTab(makeStoryTab({ status: "loading" }));
   harness.resetTrace();
@@ -755,12 +987,12 @@ test("only the exact current top-page sentinel can cover a pending reload", asyn
   const rejected = [
     { frameId: 1 },
     { documentId: "" },
-    { url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` },
+    { url: `${SF_ORIGIN}${STORY_REPORT_PATH}#home` },
     { senderId: "different-extension" },
     {
       message: {
         type: "sf-activation-ready",
-        build: "1.0.0",
+        build: "1.1.0",
         protocol: 1,
         extra: true
       }
@@ -779,8 +1011,8 @@ test("only the exact current top-page sentinel can cover a pending reload", asyn
   }
 
   harness.setTab(makeStoryTab({ status: "loading", url: `${SF_ORIGIN}${STORY_REPORT_PATH}#/home` }));
-  assert.equal((await harness.activationReady({ url: STORY_URL })).code, "ignored");
-  assert.equal(harness.state().activationAttempts[0].phase, "reload-pending");
+  assert.equal((await harness.activationReady({ url: STORY_URL })).code, "sf-activation-ready");
+  assert.equal(harness.state().activationAttempts[0].phase, "reload-attempted");
 });
 
 test("reload ambiguity remains tombstoned, storage failure cannot reload, and tab removal frees the record", async () => {
@@ -869,16 +1101,17 @@ async function createHarness(options = {}) {
     message: null,
     removed: null,
     activated: null,
+    updated: null,
     alarm: null,
     startup: null,
     installed: null
   };
   const session = {};
-  const local = {};
+  const local = options.activationBuildMarker === null
+    ? {}
+    : { [SF_ACTIVATION_BUILD_KEY]: options.activationBuildMarker || "1.1.0" };
   const alarms = new Map();
-  const tabs = new Map([[
-    10,
-    {
+  const defaultTab = options.initialTab || {
       id: 10,
       windowId: 1,
       active: true,
@@ -887,8 +1120,8 @@ async function createHarness(options = {}) {
       discarded: false,
       frozen: false,
       url: IAS_FRAME_URL
-    }
-  ]]);
+    };
+  const tabs = new Map([[defaultTab.id, clone(defaultTab)]]);
   const windows = new Map([
     [1, { id: 1, focused: true, incognito: false, type: "normal" }],
     [2, { id: 2, focused: true, incognito: false, type: "normal" }]
@@ -921,7 +1154,7 @@ async function createHarness(options = {}) {
   let resumeHook = null;
   let activationProbeResponse = {
     type: "sf-activation-current",
-    build: "1.0.0",
+    build: "1.1.0",
     protocol: 1
   };
   let activationProbeFails = false;
@@ -935,7 +1168,7 @@ async function createHarness(options = {}) {
   let tabReloadFails = false;
   let windowGetFails = false;
   let windowGetHook = null;
-  let manifestVersion = options.manifestVersion || "1.0.0";
+  let manifestVersion = options.manifestVersion || "1.1.0";
   let resumeResponse = {
     ready: true,
     replayScheduled: true,
@@ -1096,6 +1329,7 @@ async function createHarness(options = {}) {
     tabs: {
       onRemoved: { addListener: (listener) => { listeners.removed = listener; } },
       onActivated: { addListener: (listener) => { listeners.activated = listener; } },
+      onUpdated: { addListener: (listener) => { listeners.updated = listener; } },
       async query(details) {
         tabQueries.push(clone(details));
         events.push("tabs-queried");
@@ -1103,6 +1337,7 @@ async function createHarness(options = {}) {
         return [...tabs.values()].filter((tab) => {
           if (details?.active === true && tab.active !== true) return false;
           if (details?.lastFocusedWindow === true && windows.get(tab.windowId)?.focused !== true) return false;
+          if (Array.isArray(details?.url) && !isSupportedReportCenterUrl(tab.url)) return false;
           return true;
         }).map(clone);
       },
@@ -1127,7 +1362,7 @@ async function createHarness(options = {}) {
       async sendMessage(tabId, message, sendOptions) {
         if (message?.type === "sf-activation-probe") {
           assert.deepEqual(Object.keys(message).sort(), ["build", "protocol", "type"]);
-          assert.equal(message.build, "1.0.0");
+          assert.equal(message.build, "1.1.0");
           assert.equal(message.protocol, 1);
           assert.deepEqual(sendOptions, { frameId: 0 });
           activationProbes.push({ tabId, message: clone(message), options: clone(sendOptions) });
@@ -1251,16 +1486,15 @@ async function createHarness(options = {}) {
     listeners.message &&
     listeners.removed &&
     listeners.activated &&
+    listeners.updated &&
     listeners.alarm &&
     listeners.startup &&
     listeners.installed &&
     session[STATE_KEY]
   );
   if (!options.coldDetection) {
-    await dispatch(
-      { type: "get-status" },
-      { id: fakeChrome.runtime.id, url: fakeChrome.runtime.getURL("src/popup.html") }
-    );
+    await until(() => events.includes("badge-refreshed"));
+    await settle();
   }
   const startupEvents = [...events];
 
@@ -1342,7 +1576,7 @@ async function createHarness(options = {}) {
       return dispatch(
         overrides.message || {
           type: "sf-activation-ready",
-          build: "1.0.0",
+          build: "1.1.0",
           protocol: 1
         },
         activationSender(overrides)
@@ -1385,6 +1619,9 @@ async function createHarness(options = {}) {
     },
     fireInstalled(reason) { listeners.installed?.({ reason }); },
     fireActivated(tabId, windowId = 1) { listeners.activated?.({ tabId, windowId }); },
+    fireUpdated(tabId, changeInfo, tab = tabs.get(tabId)) {
+      listeners.updated?.(tabId, clone(changeInfo), clone(tab));
+    },
     fireRemoved(tabId) {
       tabs.delete(tabId);
       listeners.removed?.(tabId, { windowId: 1, isWindowClosing: false });
@@ -1392,11 +1629,12 @@ async function createHarness(options = {}) {
     fireAlarm() { listeners.alarm?.({ name: RELIABLE_ALARM_NAME, scheduledTime: Date.now() }); },
     fireStartup() { listeners.startup?.(); },
     async restart() {
+      const badgeCount = events.filter((event) => event === "badge-refreshed").length;
       await import(`../src/background.js?restart=${Date.now()}-${Math.random()}`);
-      await dispatch(
-        { type: "get-status" },
-        { id: fakeChrome.runtime.id, url: fakeChrome.runtime.getURL("src/popup.html") }
+      await until(() =>
+        events.filter((event) => event === "badge-refreshed").length > badgeCount
       );
+      await settle();
     },
     until
   };
