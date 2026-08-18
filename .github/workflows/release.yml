@@ -10,15 +10,6 @@ on:
         description: Existing immutable release tag
         required: true
         type: string
-      publish_target:
-        description: Publication target to retry
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - github
-          - edge
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -85,7 +76,6 @@ jobs:
 
   github-release:
     needs: verify-package
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'github' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,56 +123,3 @@ jobs:
           else
             gh release create "$RELEASE_TAG" "release/$ZIP" release/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "Story Reports Access Helper $RELEASE_TAG" --generate-notes --verify-tag
           fi
-
-  microsoft-edge-add-ons:
-    needs: [verify-package, github-release]
-    if: ${{ always() && vars.EDGE_ADDONS_AUTOMATION_ENABLED == 'true' && vars.EDGE_ADDONS_MANUAL_SUBMISSION_TAG != (github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name) && needs.verify-package.result == 'success' && (needs.github-release.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'edge')) && (github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'edge') }}
-    runs-on: ubuntu-latest
-    environment: microsoft-edge-add-ons
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout publisher from verified commit
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.verify-package.outputs.verified_commit }}
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 24
-
-      - name: Download exact package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: microsoft-edge-addons-package-${{ env.RELEASE_TAG }}
-          path: release
-
-      - name: Verify downloaded package checksum
-        run: (cd release && sha256sum --check SHA256SUMS.txt)
-
-      - name: Download and prove the immutable GitHub Release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          ZIP="story-reports-access-helper-for-sap-v${VERSION}-microsoft-edge-addons.zip"
-          mkdir -p github-release
-          gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ZIP" \
-            --pattern SHA256SUMS.txt \
-            --dir github-release
-          (cd github-release && sha256sum --check SHA256SUMS.txt)
-          cmp "release/$ZIP" "github-release/$ZIP"
-          cmp release/SHA256SUMS.txt github-release/SHA256SUMS.txt
-
-      - name: Submit to Microsoft Edge Add-ons
-        run: node scripts/publish-edge-addons.mjs
-        env:
-          EDGE_ADDONS_CLIENT_ID: ${{ secrets.EDGE_ADDONS_CLIENT_ID }}
-          EDGE_ADDONS_API_KEY: ${{ secrets.EDGE_ADDONS_API_KEY }}
-          EDGE_ADDONS_PRODUCT_ID: ${{ secrets.EDGE_ADDONS_PRODUCT_ID }}
-          EDGE_ADDONS_ZIP: github-release/story-reports-access-helper-for-sap-${{ env.RELEASE_TAG }}-microsoft-edge-addons.zip
-          EDGE_ADDONS_CERTIFICATION_NOTES: ${{ vars.EDGE_ADDONS_CERTIFICATION_NOTES }}

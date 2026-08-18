@@ -99,5 +99,5 @@ Before Microsoft Edge Add-ons submission:
 - public support, privacy, and security URLs must resolve from the final public repository;
 - GitHub private vulnerability reporting must be enabled for the public repository;
 - listing media must contain only fictional interface mockups and no customer data;
-- the release tag must be immutable and publisher jobs must use the already verified commit and exact package bytes; and
+- the release tag must be immutable and the GitHub Release job must use the already verified commit and exact package bytes; and
 - GitHub publication, Edge submission, certification, and live Store availability must be reported as separate states.
