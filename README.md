@@ -141,7 +141,7 @@ npm run assets:edge
 ### Repository Layout
 
 - `src/`: service worker, SAP frame scripts, popup, and local state logic.
-- `tests/`: lifecycle, security-boundary, popup, packaging, and publisher tests.
+- `tests/`: lifecycle, security-boundary, popup, packaging, and release-workflow tests.
 - `icons/`: packaged extension icons.
 - `store/assets/`: Microsoft Edge Add-ons listing artwork.
 - `docs/images/`: public README copies of the Store artwork.
